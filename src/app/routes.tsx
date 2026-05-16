@@ -4,6 +4,7 @@ import { DeckCreatePage } from "@/features/deck/deck-create-page";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
 import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
+import { ReviewSessionPage } from "@/features/review/review-session-page";
 import { Link, Outlet, createRootRoute, createRoute } from "@tanstack/react-router";
 
 const rootRoute = createRootRoute({
@@ -67,6 +68,15 @@ const cardCreateRoute = createRoute({
   },
 });
 
+const reviewSessionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck/$deckId/review",
+  component: function ReviewSessionRouteComponent() {
+    const { deckId } = reviewSessionRoute.useParams();
+    return <ReviewSessionPage deckId={deckId} />;
+  },
+});
+
 const cardEditRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/deck/$deckId/card/$cardId/edit",
@@ -103,5 +113,6 @@ export const routeTree = rootRoute.addChildren([
   deckSettingsRoute,
   cardCreateRoute,
   cardEditRoute,
+  reviewSessionRoute,
   aboutRoute,
 ]);
