@@ -12,11 +12,11 @@ describe("FlipcardsDatabase", () => {
     }
   });
 
-  it("opens at schema version 1 with the four entity stores", async () => {
+  it("opens at the current schema version with the four entity stores", async () => {
     instance = new FlipcardsDatabase();
     await instance.open();
 
-    expect(instance.verno).toBe(1);
+    expect(instance.verno).toBe(2);
     expect(instance.tables.map((t) => t.name).sort()).toEqual([
       "cards",
       "deckSets",
