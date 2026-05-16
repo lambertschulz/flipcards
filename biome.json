@@ -1,0 +1,76 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignore": ["dist", "node_modules", "coverage", ".vite"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "warn"
+      },
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "useExhaustiveDependencies": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "all",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [
+    {
+      "include": ["src/domain/**/*.{ts,tsx}"],
+      "linter": {
+        "rules": {
+          "nursery": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "react": "Domain layer (src/domain/) must not import React (ADR-0007).",
+                  "react-dom": "Domain layer (src/domain/) must not import React-DOM (ADR-0007).",
+                  "dexie": "Domain layer (src/domain/) must not import Dexie (ADR-0007).",
+                  "jotai": "Domain layer (src/domain/) must not import Jotai (ADR-0007)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "include": ["src/components/ui/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useButtonType": "off"
+          }
+        }
+      }
+    }
+  ]
+}
