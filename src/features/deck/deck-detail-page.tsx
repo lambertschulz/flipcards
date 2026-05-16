@@ -42,9 +42,14 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
             <p className="text-sm text-slate-500">Lose (keinem Deck-Set zugeordnet)</p>
           )}
         </div>
-        <Link to="/deck/$deckId/settings" params={{ deckId: deck.id }}>
-          <Button variant="outline">Deck-Einstellungen</Button>
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link to="/deck/$deckId/review" params={{ deckId: deck.id }}>
+            <Button>Lernen</Button>
+          </Link>
+          <Link to="/deck/$deckId/settings" params={{ deckId: deck.id }}>
+            <Button variant="outline">Deck-Einstellungen</Button>
+          </Link>
+        </div>
       </div>
 
       {deck.description ? (
