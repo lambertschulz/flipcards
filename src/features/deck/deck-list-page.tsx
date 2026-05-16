@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
+import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 
@@ -8,6 +9,7 @@ export function DeckListPage() {
 
   return (
     <section className="space-y-4">
+      <StorageQuotaBanner />
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-lg font-medium">Decks</h2>
         <Link to="/deck/new">
