@@ -1,12 +1,6 @@
 import "fake-indexeddb/auto";
 import { db } from "@/db/database";
-import {
-  createDeckInDb,
-  getDeck,
-  listDecks,
-  moveDeckToSetInDb,
-  updateDeckInDb,
-} from "@/db/decks";
+import { createDeckInDb, getDeck, listDecks, moveDeckToSetInDb, updateDeckInDb } from "@/db/decks";
 import { InvalidDeckNameError } from "@/domain/deck";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
