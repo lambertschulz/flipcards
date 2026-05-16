@@ -27,7 +27,19 @@ export interface CardRow {
 
 export interface ReviewStateRow {
   cardId: string;
-  due: number;
+  repetitions: number;
+  easeFactor: number;
+  intervalDays: number;
+  nextDue: number;
+}
+
+export interface ReviewLogRow {
+  id: string;
+  cardId: string;
+  timestamp: number;
+  rating: "again" | "hard" | "good" | "easy";
+  intervalAfter: number;
+  easeAfter: number;
 }
 
 export class FlipcardsDatabase extends Dexie {
@@ -35,6 +47,7 @@ export class FlipcardsDatabase extends Dexie {
   deckSets!: EntityTable<DeckSetRow, "id">;
   cards!: EntityTable<CardRow, "id">;
   reviewStates!: EntityTable<ReviewStateRow, "cardId">;
+  reviews!: EntityTable<ReviewLogRow, "id">;
 
   constructor() {
     super("flipcards");
@@ -59,6 +72,32 @@ export class FlipcardsDatabase extends Dexie {
           .toCollection()
           .modify((card) => {
             if (!Array.isArray(card.tags)) card.tags = [];
+          });
+      });
+
+    // v3 — full SM-2 review-state per ADR-0002 + the review-log table from
+    // ADR-0012. Pre-v3 the reviewStates row only held `{cardId, due}`; the
+    // upgrade promotes `due` to `nextDue` and seeds the missing SM-2 fields
+    // with the canonical defaults (treats partial rows as "fresh" cards).
+    this.version(3)
+      .stores({
+        reviewStates: "cardId, nextDue",
+        reviews: "id, cardId, timestamp",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<ReviewStateRow & { due?: number }>("reviewStates")
+          .toCollection()
+          .modify((row) => {
+            const legacyDue = row.due;
+            if (legacyDue !== undefined) {
+              row.nextDue = legacyDue;
+              row.due = undefined;
+            }
+            if (row.nextDue === undefined) row.nextDue = 0;
+            if (row.repetitions === undefined) row.repetitions = 0;
+            if (row.easeFactor === undefined) row.easeFactor = 2.5;
+            if (row.intervalDays === undefined) row.intervalDays = 0;
           });
       });
   }
