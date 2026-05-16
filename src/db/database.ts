@@ -8,6 +8,7 @@ import Dexie, { type EntityTable } from "dexie";
 export interface DeckRow {
   id: string;
   name: string;
+  description?: string;
   deckSetId?: string;
 }
 
