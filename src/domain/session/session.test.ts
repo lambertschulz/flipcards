@@ -29,12 +29,20 @@ describe("buildSessionQueue", () => {
 
   it("shuffles using the provided rng (deterministic with a fixed sequence)", () => {
     const cards = makeCards(4);
-    const queueA = buildSessionQueue(cards, { kind: "open-ended" }, {
-      rng: fixedRng([0.1, 0.9, 0.5, 0.2]),
-    });
-    const queueB = buildSessionQueue(cards, { kind: "open-ended" }, {
-      rng: fixedRng([0.1, 0.9, 0.5, 0.2]),
-    });
+    const queueA = buildSessionQueue(
+      cards,
+      { kind: "open-ended" },
+      {
+        rng: fixedRng([0.1, 0.9, 0.5, 0.2]),
+      },
+    );
+    const queueB = buildSessionQueue(
+      cards,
+      { kind: "open-ended" },
+      {
+        rng: fixedRng([0.1, 0.9, 0.5, 0.2]),
+      },
+    );
     expect(queueA.map((c) => c.id)).toEqual(queueB.map((c) => c.id));
   });
 

@@ -23,7 +23,12 @@ type Phase =
   | { kind: "reviewing"; queue: Card[]; index: number; showBack: boolean }
   | { kind: "done" };
 
-const ratingButtons: { rating: Rating; label: string; key: string; variant: "outline" | "default" }[] = [
+const ratingButtons: {
+  rating: Rating;
+  label: string;
+  key: string;
+  variant: "outline" | "default";
+}[] = [
   { rating: "again", label: "1 Again", key: "1", variant: "outline" },
   { rating: "hard", label: "2 Hard", key: "2", variant: "outline" },
   { rating: "good", label: "3 Good", key: "3", variant: "default" },
@@ -146,7 +151,10 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
       </div>
 
       {error ? (
-        <p role="alert" className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+        <p
+          role="alert"
+          className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700"
+        >
           {error}
         </p>
       ) : null}
@@ -213,11 +221,7 @@ function SessionStart({ onStart }: { onStart: (mode: SessionMode) => void }) {
             onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
             className="w-24 rounded-md border border-slate-300 px-2 py-2 dark:border-slate-700 dark:bg-slate-900"
           />
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={() => onStart({ kind: "bounded", count })}
-          >
+          <Button size="lg" variant="outline" onClick={() => onStart({ kind: "bounded", count })}>
             Bounded — {count} Cards
           </Button>
         </div>
@@ -228,15 +232,12 @@ function SessionStart({ onStart }: { onStart: (mode: SessionMode) => void }) {
 
 function SessionEmpty({ onBack }: { onBack: () => void }) {
   return (
-    <div
-      role="status"
-      className="rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700"
-    >
+    <output className="block rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
       <p className="mb-3 text-slate-600 dark:text-slate-400">
         Keine Cards fällig. Komm später wieder oder lerne deck-übergreifend per Tag.
       </p>
       <Button onClick={onBack}>Zurück zum Deck</Button>
-    </div>
+    </output>
   );
 }
 
@@ -284,18 +285,14 @@ function ReviewCardView({
       </div>
 
       {phase.showBack ? (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="group" aria-label="Antwort">
+        <fieldset className="grid grid-cols-2 gap-2 border-0 p-0 sm:grid-cols-4">
+          <legend className="sr-only">Antwort</legend>
           {ratingButtons.map((b) => (
-            <Button
-              key={b.rating}
-              size="lg"
-              variant={b.variant}
-              onClick={() => onAnswer(b.rating)}
-            >
+            <Button key={b.rating} size="lg" variant={b.variant} onClick={() => onAnswer(b.rating)}>
               {b.label}
             </Button>
           ))}
-        </div>
+        </fieldset>
       ) : null}
 
       <div className="flex items-center justify-between text-sm text-slate-500">

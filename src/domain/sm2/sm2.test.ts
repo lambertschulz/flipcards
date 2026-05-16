@@ -1,9 +1,4 @@
-import {
-  INITIAL_REVIEW_STATE,
-  type ReviewState,
-  isDue,
-  scheduleNext,
-} from "@/domain/sm2";
+import { INITIAL_REVIEW_STATE, type ReviewState, isDue, scheduleNext } from "@/domain/sm2";
 import { describe, expect, it } from "vitest";
 
 const DAY_MS = 24 * 60 * 60 * 1000;

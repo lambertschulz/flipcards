@@ -1,11 +1,7 @@
 import "fake-indexeddb/auto";
 import { createCardInDb } from "@/db/cards";
 import { db } from "@/db/database";
-import {
-  getReviewState,
-  listDueCardsInDeck,
-  putReviewState,
-} from "@/db/review-states";
+import { getReviewState, listDueCardsInDeck, putReviewState } from "@/db/review-states";
 import { INITIAL_REVIEW_STATE, type ReviewState } from "@/domain/sm2";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
