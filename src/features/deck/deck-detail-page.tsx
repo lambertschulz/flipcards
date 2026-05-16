@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { deleteCard } from "@/db/cards";
 import { db } from "@/db/database";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -8,6 +9,11 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
   const deckSet = useLiveQuery(
     async () => (deck?.deckSetId ? await db.deckSets.get(deck.deckSetId) : undefined),
     [deck?.deckSetId],
+    undefined,
+  );
+  const cards = useLiveQuery(
+    () => db.cards.where("deckId").equals(deckId).toArray(),
+    [deckId],
     undefined,
   );
 
@@ -45,9 +51,59 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
         <p className="whitespace-pre-line text-slate-700 dark:text-slate-300">{deck.description}</p>
       ) : null}
 
-      <p className="text-sm text-slate-500">
-        Cards werden in einem späteren Ticket hinzugefügt (siehe #5).
-      </p>
+      <div className="flex items-center justify-between gap-2 pt-2">
+        <h3 className="text-base font-medium">Cards</h3>
+        <Link to="/deck/$deckId/card/new" params={{ deckId: deck.id }}>
+          <Button>+ Neue Card</Button>
+        </Link>
+      </div>
+
+      {cards === undefined ? (
+        <p className="text-sm text-slate-500">Lade Cards…</p>
+      ) : cards.length === 0 ? (
+        <div className="rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
+          <p className="mb-3 text-slate-600 dark:text-slate-400">Noch keine Cards angelegt.</p>
+          <Link to="/deck/$deckId/card/new" params={{ deckId: deck.id }}>
+            <Button>Erste Card anlegen</Button>
+          </Link>
+        </div>
+      ) : (
+        <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+          {cards.map((card) => (
+            <li
+              key={card.id}
+              className="flex items-center justify-between gap-2 px-3 py-2 min-h-[44px]"
+            >
+              <Link
+                to="/deck/$deckId/card/$cardId/edit"
+                params={{ deckId: deck.id, cardId: card.id }}
+                className="flex-1 truncate hover:underline"
+              >
+                {firstLine(card.front) || "(leere Vorderseite)"}
+              </Link>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  if (confirm("Card endgültig löschen?")) await deleteCard(card.id);
+                }}
+                aria-label="Card löschen"
+              >
+                Löschen
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
+}
+
+function firstLine(markdown: string): string {
+  const line = markdown.split("\n").find((l) => l.trim().length > 0) ?? "";
+  return line
+    .replace(/^#+\s*/, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "[Bild]")
+    .trim();
 }

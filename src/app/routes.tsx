@@ -1,3 +1,5 @@
+import { CardCreatePage } from "@/features/card/card-create-page";
+import { CardEditPage } from "@/features/card/card-edit-page";
 import { DeckCreatePage } from "@/features/deck/deck-create-page";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
 import { DeckListPage } from "@/features/deck/deck-list-page";
@@ -56,6 +58,24 @@ const deckSettingsRoute = createRoute({
   },
 });
 
+const cardCreateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck/$deckId/card/new",
+  component: function CardCreateRouteComponent() {
+    const { deckId } = cardCreateRoute.useParams();
+    return <CardCreatePage deckId={deckId} />;
+  },
+});
+
+const cardEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck/$deckId/card/$cardId/edit",
+  component: function CardEditRouteComponent() {
+    const { deckId, cardId } = cardEditRoute.useParams();
+    return <CardEditPage deckId={deckId} cardId={cardId} />;
+  },
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -81,5 +101,7 @@ export const routeTree = rootRoute.addChildren([
   deckCreateRoute,
   deckDetailRoute,
   deckSettingsRoute,
+  cardCreateRoute,
+  cardEditRoute,
   aboutRoute,
 ]);

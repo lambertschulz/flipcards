@@ -22,6 +22,7 @@ export interface CardRow {
   deckId: string;
   front: string;
   back: string;
+  tags: string[];
 }
 
 export interface ReviewStateRow {
@@ -44,6 +45,22 @@ export class FlipcardsDatabase extends Dexie {
       cards: "id, deckId",
       reviewStates: "cardId, due",
     });
+
+    // v2 — card tags become first-class (issue #5 card-editor). `*tags` is a
+    // multi-entry index so tag-sessions (issue #7) can query cards by tag
+    // without a full scan. Backfill: pre-v2 cards lacked the field at all.
+    this.version(2)
+      .stores({
+        cards: "id, deckId, *tags",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<CardRow>("cards")
+          .toCollection()
+          .modify((card) => {
+            if (!Array.isArray(card.tags)) card.tags = [];
+          });
+      });
   }
 }
 
