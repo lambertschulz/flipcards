@@ -1,0 +1,18 @@
+{
+  "format": "flipcards.shared-deck",
+  "formatVersion": 1,
+  "exportedAt": "2026-05-16T10:14:00Z",
+  "deck": {
+    "id": "4f2c3a1b-7d8e-4a6b-9c2d-1e3f5a7b9c0d",
+    "name": "Französisch — Vokabeln A2",
+    "description": "Wortschatz aus „Voyage en France\", Lektion 4–8."
+  },
+  "cards": [
+    {
+      "id": "a1b2c3d4-e5f6-4789-a0b1-c2d3e4f5a6b7",
+      "front": "l'ouïe",
+      "back": "das Gehör (f.) — der Hörsinn\n\n[lwi]",
+      "tags": ["körper", "prüfung"]
+    }
+  ]
+}
