@@ -5,8 +5,8 @@ import { DeckSetDetailPage } from "@/features/deck-set/deck-set-detail-page";
 import { DeckSetSettingsPage } from "@/features/deck-set/deck-set-settings-page";
 import { DeckCreatePage } from "@/features/deck/deck-create-page";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
-import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
+import { HomePage } from "@/features/home/home-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
 import { SettingsPage } from "@/features/settings/settings-page";
 import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
@@ -44,7 +44,7 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: DeckListPage,
+  component: HomePage,
 });
 
 const deckCreateRoute = createRoute({
