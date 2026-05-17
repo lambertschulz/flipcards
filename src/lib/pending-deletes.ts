@@ -21,6 +21,26 @@
 //
 // The store is intentionally framework-agnostic; the React glue lives in
 // `pending-deletes-react.ts`.
+//
+// Interaction classes (ADR-0014 — three-class enumeration introduced
+// in the round-4 sharpened brief for issue #8):
+//
+//   (a) **Read paths** must go through the `useVisible*` hooks in
+//       `pending-deletes-react.ts` (or call `isPending(key)` directly for
+//       non-React reads). Never query Dexie for one of the three entity
+//       tables and surface the result without first filtering by
+//       `isPending`.
+//   (b) **Destructive bulk-replace paths** (backup restore, global wipe,
+//       any future clean-slate-replace import) must call `cancelAll()`
+//       BEFORE mutating the DB. The semantics: pending ops were never
+//       committed — they hold a deferred `commit()` thunk; calling
+//       `cancelAll()` discards those thunks so they cannot fire onto a
+//       freshly-imported row whose ID happens to collide. `flushAll()` is
+//       the wrong tool for this — it *commits* the deferred deletes,
+//       which is fine for tab-close but is data loss for bulk-replace.
+//   (c) **Navigate-by-id paths** get pending-deleted entities filtered for
+//       free via the `useVisible*` hooks returning `undefined`. No
+//       additional contract — class (a) covers this transparently.
 
 export type PendingOp = {
   readonly id: string;
@@ -121,6 +141,29 @@ export type PendingDeletesStore = {
   flush(id: string): Promise<void>;
   /** Synchronously commit every pending op. Used by `visibilitychange → hidden`. */
   flushAll(): Promise<void>;
+  /**
+   * Discard every `pending` op without committing, and await any `committing`
+   * op already in flight so its Dexie transaction settles before we resolve.
+   *
+   * Canonical "I am about to clobber the DB" hook — call this at the start of
+   * every destructive bulk-replace path (backup restore, global wipe, any
+   * future clean-slate-replace import). See the three-class enumeration in
+   * the module header and ADR-0014.
+   *
+   * Why discard rather than commit:
+   * - Pending ops hold a *deferred* `commit()` thunk; the rows in the DB
+   *   were never touched. Dropping the thunk leaves the DB untouched by
+   *   this op (which is what the bulk-replace caller wants — it's about
+   *   to overwrite the DB anyway).
+   * - If we called `flushAll()` instead, a deferred delete whose primary
+   *   key collides with a row in the imported backup would run *after*
+   *   the import and silently delete the new row.
+   *
+   * After this resolves: `list()` is empty (committing ops drop on settle
+   * via the normal commit lifecycle; pending ops drop immediately), and
+   * `isPending(k)` is `false` for every k.
+   */
+  cancelAll(): Promise<void>;
   list(): readonly PendingOp[];
   isPending(key: string): boolean;
   subscribe(listener: Listener): () => void;
@@ -286,6 +329,39 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
 
     flush(id) {
       return commitOp(id);
+    },
+
+    async cancelAll() {
+      // Snapshot committing-op promises BEFORE we drop pending ops so we
+      // can await them. We do NOT touch their lifecycle — they're already
+      // in flight and Dexie will run them to completion. The drop happens
+      // naturally when each commitOp resolves and calls `dropOp`.
+      const committingPromises: Promise<void>[] = [];
+      for (const op of ops) {
+        if (op.state === "committing") {
+          const p = commitPromises.get(op.id);
+          if (p) committingPromises.push(p);
+        }
+      }
+
+      // Discard every `pending` op: clear its timer, drop the captured
+      // commit/restore thunks (so the timer firing late — racing this call —
+      // becomes a no-op via the `op.state !== "pending"` guard in commitOp),
+      // and remove it from the visible list. No commit, no restore: the
+      // rows in the DB were never touched.
+      const pendingIds: string[] = [];
+      for (const op of ops) {
+        if (op.state === "pending") pendingIds.push(op.id);
+      }
+      for (const id of pendingIds) {
+        clearTimer(id);
+        dropOp(id);
+      }
+      if (pendingIds.length > 0) publish();
+
+      // Await any committing ops so the caller can safely run its own
+      // bulk-replace transaction without racing a half-done delete.
+      await Promise.all(committingPromises);
     },
 
     async flushAll() {

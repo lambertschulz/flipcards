@@ -8,13 +8,14 @@
 // in the middle.
 
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/db/database";
 import { parseBackup, stringifyBackup } from "@/domain/backup";
 import { applyBackup } from "@/features/backup/apply";
 import { collectBackup } from "@/features/backup/collect";
 import { wipeAllData } from "@/features/settings/wipe";
+import { __resetPendingDeletesForTests, getPendingDeletes } from "@/lib/pending-deletes";
 
 const fixedClock = { now: () => new Date("2026-05-17T08:00:00Z") };
 
@@ -24,6 +25,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await db.delete();
+  __resetPendingDeletesForTests();
 });
 
 async function seedFixture() {
@@ -110,6 +112,63 @@ describe("Backup round-trip (issue #21 headline AC)", () => {
     expect(sortById(after.cards)).toEqual(sortById(before.cards));
     expect(sortById(after.reviewStates)).toEqual(sortById(before.reviewStates));
     expect(sortById(after.reviews)).toEqual(sortById(before.reviews));
+  });
+
+  it("applyBackup drains the pending-delete coordinator before importing (round-4)", async () => {
+    // ADR-0014 class (b): destructive bulk-replace paths must call
+    // `cancelAll()` BEFORE clobbering the DB. The risk this regression
+    // pins: a deferred delete whose primary key collides with a row in
+    // the imported backup would otherwise fire (timer pops, or
+    // `visibilitychange` calls `flushAll`) and silently delete the
+    // freshly-imported row.
+    //
+    // Setup: seed a card, enqueue a pending delete for that card's key,
+    // then apply a backup that contains a card with the SAME id. After
+    // applyBackup resolves, the imported card must be present in the DB
+    // (because the pending op was discarded — `cancelAll()`, not
+    // `flushAll()`).
+    await seedFixture();
+    const store = getPendingDeletes();
+
+    const commit = vi.fn().mockResolvedValue(undefined);
+    // Primary key collides with `card-anat01` in seedFixture / the backup.
+    store.enqueue({
+      key: "card:card-anat01",
+      label: "Card gelöscht",
+      commit,
+      restore: async () => {},
+    });
+    expect(store.list()).toHaveLength(1);
+
+    const file = await collectBackup(fixedClock);
+
+    // Wipe to simulate the import flow; wipe also drains the coordinator
+    // (which is part of the contract being tested), so re-enqueue a
+    // fresh pending op AFTER the wipe to exercise applyBackup's own drain.
+    await wipeAllData();
+    const commitAfterWipe = vi.fn().mockResolvedValue(undefined);
+    store.enqueue({
+      key: "card:card-anat01",
+      label: "Card gelöscht",
+      commit: commitAfterWipe,
+      restore: async () => {},
+    });
+    expect(store.list()).toHaveLength(1);
+
+    const parseResult = parseBackup(stringifyBackup(file));
+    if (!parseResult.ok) throw new Error(`parse failed: ${JSON.stringify(parseResult.error)}`);
+    await applyBackup(parseResult.value);
+
+    // The post-wipe pending op was discarded — its commit must NOT have
+    // fired onto the imported data.
+    expect(commitAfterWipe).not.toHaveBeenCalled();
+    expect(store.list()).toHaveLength(0);
+    expect(store.isPending("card:card-anat01")).toBe(false);
+
+    // The imported card is present (the pending op did NOT delete it).
+    const importedCard = await db.cards.get("card-anat01");
+    expect(importedCard).toBeDefined();
+    expect(importedCard?.front).toBe("Hippocampus");
   });
 
   it("sanitises orphan deckSetId during export (codex review PR #50)", async () => {

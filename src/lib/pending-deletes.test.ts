@@ -361,6 +361,102 @@ describe("createPendingDeletesStore — lifecycle (visibilitychange + pagehide)"
     expect(store.list()).toHaveLength(0);
   });
 
+  it("cancelAll discards pending ops without invoking their commit fns (round-4)", async () => {
+    // ADR-0014 class (b): destructive bulk-replace paths (backup-restore,
+    // global wipe) call `cancelAll()` to drain the coordinator BEFORE
+    // clobbering the DB. Discard semantics — commit must NOT fire, because
+    // the rows in the DB were never touched and the caller is about to
+    // overwrite them anyway. If commit fired, a deferred delete whose
+    // primary key collides with a freshly-imported backup row would
+    // silently delete the new data.
+    const scheduler = makeManualScheduler();
+    const commitA = vi.fn().mockResolvedValue(undefined);
+    const commitB = vi.fn().mockResolvedValue(undefined);
+    const restoreA = vi.fn().mockResolvedValue(undefined);
+    const restoreB = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "A", commit: commitA, restore: restoreA });
+    store.enqueue({ key: "card:2", label: "B", commit: commitB, restore: restoreB });
+
+    expect(store.list()).toHaveLength(2);
+    expect(scheduler.pending()).toBe(2);
+
+    await store.cancelAll();
+
+    expect(commitA).not.toHaveBeenCalled();
+    expect(commitB).not.toHaveBeenCalled();
+    // restore is also not called: the rows were never touched, so there's
+    // nothing to restore. (Compare with `undo`, which DOES call restore for
+    // symmetry with future variants that touch IDB pre-commit.)
+    expect(restoreA).not.toHaveBeenCalled();
+    expect(restoreB).not.toHaveBeenCalled();
+    expect(store.list()).toHaveLength(0);
+    expect(store.isPending("card:1")).toBe(false);
+    expect(store.isPending("card:2")).toBe(false);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("cancelAll awaits any commit already in flight (round-4)", async () => {
+    // Race shape: the 10s auto-commit timer fires for op X at the exact
+    // moment the user clicks "Backup importieren". The import code calls
+    // `cancelAll()`. Op X is no longer `pending` — it's `committing`,
+    // with a Dexie transaction in flight. `cancelAll()` must NOT resolve
+    // until that transaction settles, otherwise the import's own
+    // transaction would race the delete-transaction.
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    let commitFinished = false;
+    const commit = vi.fn(async () => {
+      await new Promise<void>((res) => {
+        resolveCommit = res;
+      });
+      commitFinished = true;
+    });
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    // Fire the auto-commit timer so the op enters `committing`.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    expect(store.list()[0]?.state).toBe("committing");
+
+    let cancelResolved = false;
+    const cancelDone = store.cancelAll().then(() => {
+      cancelResolved = true;
+    });
+
+    // Without the in-flight await, cancelAll would resolve immediately;
+    // microtasks let that wrong resolution surface if the bug is present.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cancelResolved).toBe(false);
+    expect(commitFinished).toBe(false);
+
+    resolveCommit();
+    await cancelDone;
+    expect(cancelResolved).toBe(true);
+    expect(commitFinished).toBe(true);
+  });
+
+  it("cancelAll defuses a late-firing timer that races the cancel call (round-4)", async () => {
+    // Edge case: the timer is sitting in the scheduler queue but hasn't
+    // fired yet when `cancelAll()` is called. After `cancelAll()` resolves,
+    // if the scheduler then fires the (now stale) timer, the captured
+    // commit thunk must not run — the op was discarded.
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    await store.cancelAll();
+    expect(commit).not.toHaveBeenCalled();
+    // The timer has been cleared from the scheduler — nothing to fire.
+    expect(scheduler.pending()).toBe(0);
+  });
+
   it("flushAll commits every pending op without affecting committed ones", async () => {
     const scheduler = makeManualScheduler();
     const commitA = vi.fn().mockResolvedValue(undefined);

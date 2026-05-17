@@ -18,6 +18,7 @@ import {
   db,
 } from "@/db/database";
 import type { BackupFileV1 } from "@/domain/backup";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 
 export type ApplySummary = {
   decks: number;
@@ -67,6 +68,13 @@ export async function applyBackup(file: BackupFileV1): Promise<ApplySummary> {
     intervalAfter: r.intervalAfter,
     easeAfter: r.easeAfter,
   }));
+
+  // Bulk-replace path — ADR-0014 class (b). Drain the pending-delete
+  // coordinator BEFORE clobbering the DB so a deferred delete whose primary
+  // key collides with an imported row cannot fire onto the new data.
+  // `cancelAll()` discards pending ops without committing and awaits any
+  // commit already in flight.
+  await getPendingDeletes().cancelAll();
 
   await db.transaction(
     "rw",

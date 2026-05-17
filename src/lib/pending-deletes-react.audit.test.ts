@@ -93,6 +93,43 @@ function filterLeaks(matches: string[]): string[] {
   });
 }
 
+// Round-4 sharpened brief added a third audit: every destructive
+// bulk-replace site (`db.{table}.{clear,bulkPut,bulkAdd,bulkDelete}`) must
+// either be inside the deletion-coordinator's own transactions
+// (`src/db/deletion.ts`, the canonical sink for committing pending deletes)
+// or in a file that also calls `cancelAll()` (the canonical "drain the
+// coordinator before clobbering the DB" hook). Catching new bulk-replace
+// callsites that forget to drain is the architectural enforcement of
+// ADR-0014 class (b).
+//
+// The pattern: `db.<table>.{clear|bulkPut|bulkAdd|bulkDelete}(`. We list
+// the destructive verbs explicitly; non-destructive verbs (`put`, `add`,
+// `update`, `delete` for single rows) are not bulk-replace and don't
+// trigger the contract.
+const BULK_REPLACE_PATTERN = String.raw`db\.(decks|deckSets|cards|reviewStates|reviews)\.(clear|bulkPut|bulkAdd|bulkDelete)\(`;
+
+// Files where bulk-replace ops are sanctioned without a `cancelAll()` call,
+// because they are themselves the implementation of the coordinator's
+// commit/restore thunks (`src/db/deletion.ts`) or they're test fixtures
+// (filtered separately by extension).
+const SANCTIONED_BULK_FILES = new Set(["src/db/deletion.ts"]);
+
+function fileHasCancelAll(file: string): boolean {
+  // Files that opt into the contract must mention `cancelAll(` somewhere.
+  // We're not parsing the call graph — the grep is the audit, and a
+  // mention is sufficient evidence that the maintainer thought about it.
+  try {
+    const out = execFileSync(
+      "git",
+      ["grep", "-l", "cancelAll(", "--", path.resolve(REPO_ROOT, file)],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 describe("pending-delete grep audit (ADR-0014)", () => {
   it("every useLiveQuery against db.{decks,deckSets,cards} goes through pending-deletes-react.ts", () => {
     const leaks = filterLeaks(gitGrep(TABLE_PATTERN));
@@ -109,5 +146,29 @@ describe("pending-delete grep audit (ADR-0014)", () => {
     // canonical list helpers.
     const leaks = filterLeaks(gitGrep(HELPER_PATTERN));
     expect(leaks, leaks.join("\n")).toEqual([]);
+  });
+
+  it("every destructive bulk-replace site drains the pending-delete coordinator", () => {
+    // Round-4 invariant (ADR-0014 class (b)): any file that calls
+    // `db.<table>.{clear|bulkPut|bulkAdd|bulkDelete}` must also call
+    // `cancelAll()` (the canonical drain hook), OR be the deletion
+    // coordinator itself (which IS the sink for pending-delete commits).
+    //
+    // Why this matters: a deferred delete whose primary key collides with
+    // a row that a backup-import is about to write would otherwise fire
+    // (after its 10s timer) onto the freshly-imported data and silently
+    // delete it. `cancelAll()` discards the pending op without committing.
+    const matches = gitGrep(BULK_REPLACE_PATTERN);
+    const offenders: string[] = [];
+    const filesSeen = new Set<string>();
+    for (const line of matches) {
+      const file = line.split(":")[0] ?? "";
+      if (/\.test\.[tj]sx?$/.test(file)) continue;
+      if (SANCTIONED_BULK_FILES.has(file)) continue;
+      if (filesSeen.has(file)) continue;
+      filesSeen.add(file);
+      if (!fileHasCancelAll(file)) offenders.push(`${file} — missing cancelAll() drain call`);
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
   });
 });
