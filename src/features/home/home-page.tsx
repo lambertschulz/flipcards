@@ -191,6 +191,11 @@ function HomeHeader() {
             <span aria-hidden="true">#</span>
           </Button>
         </Link>
+        <Link to="/statistik" aria-label="Statistik öffnen" title="Statistik">
+          <Button variant="outline" size="icon">
+            <span aria-hidden="true">∑</span>
+          </Button>
+        </Link>
         <Link to="/settings" aria-label="Einstellungen öffnen" title="Einstellungen">
           <Button variant="outline" size="icon">
             <span aria-hidden="true">⚙</span>

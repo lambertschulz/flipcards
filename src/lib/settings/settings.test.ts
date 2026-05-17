@@ -20,11 +20,17 @@ describe("settings module", () => {
   });
 
   it("round-trips a full write", () => {
-    writeSettings({ language: "en", theme: "dark", backupReminderFrequency: "weekly" });
+    writeSettings({
+      language: "en",
+      theme: "dark",
+      backupReminderFrequency: "weekly",
+      showStreak: false,
+    });
     expect(readSettings()).toEqual({
       language: "en",
       theme: "dark",
       backupReminderFrequency: "weekly",
+      showStreak: false,
     });
   });
 
@@ -35,6 +41,7 @@ describe("settings module", () => {
       language: "en",
       theme: "dark",
       backupReminderFrequency: "off",
+      showStreak: true,
     });
   });
 
@@ -52,6 +59,7 @@ describe("settings module", () => {
       language: "de", // fr → fallback
       theme: "dark", // valid
       backupReminderFrequency: "off", // daily → fallback
+      showStreak: true, // missing → default
     });
   });
 

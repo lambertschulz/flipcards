@@ -68,7 +68,7 @@ describe("SettingsPage", () => {
     await db.reviews.clear();
   });
 
-  it("renders all five sections in order", async () => {
+  it("renders all six sections in order", async () => {
     const router = await setupRouter();
     render(<RouterProvider router={router} />);
 
@@ -78,9 +78,23 @@ describe("SettingsPage", () => {
       "Sprache",
       "Theme",
       "Backup-Erinnerung",
+      "Lernserie",
       "Speicher",
       "Daten löschen",
     ]);
+  });
+
+  it("toggles the Lernserie opt-out and persists it", async () => {
+    const router = await setupRouter();
+    render(<RouterProvider router={router} />);
+
+    const checkbox = (await screen.findByLabelText("Lernserie anzeigen")) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true); // ADR-0012: Default = an
+
+    await clickAndFlush(checkbox);
+    await waitFor(() => {
+      expect(readSettings().showStreak).toBe(false);
+    });
   });
 
   it("persists a theme change and applies the dark class live", async () => {

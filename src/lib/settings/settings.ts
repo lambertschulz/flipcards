@@ -19,12 +19,21 @@ export interface Settings {
   language: Language;
   theme: Theme;
   backupReminderFrequency: BackupReminderFrequency;
+  /**
+   * Whether the Streak ("Lernserie") is shown anywhere in the UI. ADR-0012
+   * mandates an opt-out toggle to address the "stress-inducing" critique of
+   * the feature without sacrificing it for users who *want* the streak.
+   * Default = `true` (on). When off, the Stats-Screen's Streak section and
+   * any future Streak chips are hidden; the underlying log keeps growing.
+   */
+  showStreak: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   language: "de",
   theme: "system",
   backupReminderFrequency: "off",
+  showStreak: true,
 };
 
 // Single key, JSON-encoded blob. One key keeps the localStorage surface tiny
@@ -64,6 +73,7 @@ export function readSettings(): Settings {
     backupReminderFrequency: isFrequency(obj.backupReminderFrequency)
       ? obj.backupReminderFrequency
       : DEFAULT_SETTINGS.backupReminderFrequency,
+    showStreak: typeof obj.showStreak === "boolean" ? obj.showStreak : DEFAULT_SETTINGS.showStreak,
   };
 }
 

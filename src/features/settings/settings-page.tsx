@@ -63,6 +63,13 @@ export function SettingsPage() {
         }}
       />
 
+      <StreakSection
+        value={settings.showStreak}
+        onChange={(v) => {
+          update("showStreak", v);
+        }}
+      />
+
       <StorageSection />
 
       <ResetSection onClick={() => setResetOpen(true)} />
@@ -148,6 +155,40 @@ function BackupReminderSection({
       />
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Erinnert dich, gelegentlich ein Backup deiner Decks und Lerndaten zu erstellen.
+      </p>
+    </SettingsBlock>
+  );
+}
+
+// --- 3b. Lernserie (Streak) -----------------------------------------------
+
+/**
+ * Streak-opt-out per ADR-0012. Default = an; when off, Streak-Surfaces im
+ * Stats-Screen werden ausgeblendet — der zugrundeliegende Review-Log wird
+ * weiter geführt, sodass der Toggle ohne Datenverlust hin- und herwandern
+ * kann.
+ */
+function StreakSection({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <SettingsBlock title="Lernserie">
+      <label className="flex items-center gap-3 text-sm">
+        <input
+          type="checkbox"
+          checked={value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-4 w-4"
+        />
+        <span>Lernserie anzeigen</span>
+      </label>
+      <p className="text-xs text-slate-500 dark:text-slate-400">
+        Zeigt aktuelle Tages-Serie und Rekord im Statistik-Screen. Aus heißt: die Serie wird
+        ausgeblendet, weiter aufgezeichnet wird sie trotzdem.
       </p>
     </SettingsBlock>
   );
