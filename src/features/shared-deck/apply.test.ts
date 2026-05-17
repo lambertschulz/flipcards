@@ -4,7 +4,7 @@
 //   3. No match → fresh import.
 
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/db/database";
 import { SHARED_DECK_FORMAT, type SharedDeck } from "@/domain/shared-deck";
@@ -235,5 +235,165 @@ describe("applySharedDeckImport — frisch importierte Cards sind sofort due", (
     expect(orphan).toBeUndefined();
     const allStates = await db.reviewStates.toArray();
     expect(allStates).toHaveLength(0);
+  });
+
+  // Round-4 sharpened-brief regression: the fresh-due invariant covers
+  // BOTH per-card-progress tables, not just `reviewStates`. The
+  // review-log table (`db.reviews`) has `cardId` as a non-PK index, so a
+  // single deleted card can leave many orphan rows. If any survive an
+  // import they would attach to the newly-imported card-id and surface
+  // as local learning history (counted by backup-collection, etc.),
+  // violating "Shared Decks carry no review state, fresh due on import".
+  it("purges orphan db.reviews log rows for imported card-ids (new-deck branch)", async () => {
+    // Seed a handful of orphan review-log rows on a card-id we're about
+    // to import. Multiple rows because `cardId` is a multi-row index.
+    await db.reviews.bulkAdd([
+      {
+        id: "rev-orphan-A",
+        cardId: "card-share001",
+        timestamp: Date.now() - 7 * 86_400_000,
+        rating: "good",
+        intervalAfter: 1,
+        easeAfter: 2.5,
+      },
+      {
+        id: "rev-orphan-B",
+        cardId: "card-share001",
+        timestamp: Date.now() - 3 * 86_400_000,
+        rating: "easy",
+        intervalAfter: 4,
+        easeAfter: 2.65,
+      },
+    ]);
+
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("new");
+    expect(summary.cardsAdded).toBe(2);
+
+    const orphans = await db.reviews.where("cardId").equals("card-share001").toArray();
+    expect(orphans).toHaveLength(0);
+    // Sanity: no review-log rows whatsoever for the imported card-ids.
+    const total = await db.reviews.toArray();
+    expect(total).toHaveLength(0);
+  });
+
+  it("purges orphan db.reviews log rows for added card-ids (merge branch)", async () => {
+    // Merge branch — target deck exists locally; the orphan review-log
+    // rows sit on a card-id we'll add via the additive merge.
+    await db.decks.add({ id: "deck-shared01", name: "Existing local name" });
+    await db.reviews.bulkAdd([
+      {
+        id: "rev-orphan-C",
+        cardId: "card-share002",
+        timestamp: Date.now() - 10 * 86_400_000,
+        rating: "again",
+        intervalAfter: 0,
+        easeAfter: 2.3,
+      },
+      {
+        id: "rev-orphan-D",
+        cardId: "card-share002",
+        timestamp: Date.now() - 1 * 86_400_000,
+        rating: "hard",
+        intervalAfter: 1,
+        easeAfter: 2.25,
+      },
+    ]);
+
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("merged");
+    expect(summary.cardsAdded).toBe(2);
+
+    const orphans = await db.reviews.where("cardId").equals("card-share002").toArray();
+    expect(orphans).toHaveLength(0);
+    const total = await db.reviews.toArray();
+    expect(total).toHaveLength(0);
+  });
+
+  it("purges both per-card-progress tables together on the same card-id (merge branch)", async () => {
+    // Combined-table regression: a previously-deleted card-id can leave
+    // BOTH an orphan reviewStates row AND orphan review-log rows. The
+    // import must purge both inside the same transaction.
+    await db.decks.add({ id: "deck-shared01", name: "Existing local name" });
+    await db.reviewStates.add({
+      cardId: "card-share001",
+      repetitions: 5,
+      easeFactor: 2.7,
+      intervalDays: 21,
+      nextDue: Date.now() + 21 * 86_400_000,
+    });
+    await db.reviews.bulkAdd([
+      {
+        id: "rev-orphan-E",
+        cardId: "card-share001",
+        timestamp: Date.now() - 30 * 86_400_000,
+        rating: "good",
+        intervalAfter: 21,
+        easeAfter: 2.7,
+      },
+    ]);
+
+    const summary = await applySharedDeckImport(makeFile());
+    expect(summary.mode).toBe("merged");
+
+    // card-share001 was already present locally (merge branch only adds
+    // cards whose ids are NOT in the global set), so the merge skips it.
+    // The orphan rows would be invisible because no card row exists to
+    // reference them — but the invariant says imports carry NO history.
+    //
+    // The seeded card-share001 was *only* the orphan reviewStates/reviews;
+    // the cards table is empty for that id, so the import treats it as a
+    // new card-id (not in globalCardIds) and adds it. Both orphan tables
+    // must be purged for that id.
+    const addedCard = await db.cards.get("card-share001");
+    expect(addedCard).toBeDefined();
+
+    expect(await db.reviewStates.get("card-share001")).toBeUndefined();
+    expect(await db.reviews.where("cardId").equals("card-share001").toArray()).toHaveLength(0);
+  });
+});
+
+describe("applySharedDeckImport — pending-delete coordinator drain (ADR-0014)", () => {
+  it("drains the pending-delete coordinator before mutating the DB (class (b))", async () => {
+    // ADR-0014 class (b): destructive bulk-replace paths must call
+    // `cancelAll()` BEFORE mutating the DB. The risk this regression pins:
+    // a deferred delete whose primary key collides with an incoming
+    // card-id would otherwise fire (10s timer pops, or `visibilitychange`
+    // calls `flushAll`) and silently delete the freshly-imported row.
+    //
+    // Setup: enqueue a pending delete keyed on a card-id that the import
+    // file also introduces. After the import resolves, the pending op
+    // must have been discarded (cancelAll, not flushAll) and the imported
+    // card must be present.
+    const { getPendingDeletes, __resetPendingDeletesForTests } = await import(
+      "@/lib/pending-deletes"
+    );
+    __resetPendingDeletesForTests();
+    const store = getPendingDeletes();
+
+    const commit = vi.fn().mockResolvedValue(undefined);
+    store.enqueue({
+      key: "card:card-share001",
+      label: "Card gelöscht",
+      commit,
+      restore: async () => {},
+    });
+    expect(store.list()).toHaveLength(1);
+
+    await applySharedDeckImport(makeFile());
+
+    // Deferred commit was discarded, not run.
+    expect(commit).not.toHaveBeenCalled();
+    expect(store.list()).toHaveLength(0);
+    expect(store.isPending("card:card-share001")).toBe(false);
+
+    // Imported card is present — the pending op did NOT delete it.
+    const imported = await db.cards.get("card-share001");
+    expect(imported).toBeDefined();
+    expect(imported?.front).toBe("bonjour");
+
+    __resetPendingDeletesForTests();
   });
 });
