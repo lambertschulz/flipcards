@@ -2,39 +2,30 @@ import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { deleteCardWithCascade, restoreDeletedCard } from "@/db/deletion";
 import { getPendingDeletes } from "@/lib/pending-deletes";
-import { usePendingDeletes } from "@/lib/pending-deletes-react";
+import { useVisibleCards, useVisibleDeck, useVisibleDeckSet } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect } from "react";
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
   const navigate = useNavigate();
-  const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
-  const deckSet = useLiveQuery(
-    async () => (deck?.deckSetId ? await db.deckSets.get(deck.deckSetId) : undefined),
-    [deck?.deckSetId],
-    undefined,
-  );
-  const cards = useLiveQuery(
-    () => db.cards.where("deckId").equals(deckId).toArray(),
-    [deckId],
-    undefined,
-  );
-  // Subscribe so this component re-renders whenever the pending-deletes store
-  // changes. The actual hide predicate is `store.isPending(key)`, which
-  // already covers both `pending` and `committing` — keeping the row hidden
-  // through the in-flight commit window so it can't briefly flash back in.
-  usePendingDeletes();
-  const store = getPendingDeletes();
+  // ADR-0014: route every read through the visibility-filtered hooks so a
+  // pending-deleted deck (or any pending-deleted child card) cannot surface
+  // here. `useVisibleDeck` returns `undefined` when the deck's
+  // `deck:<id>` op is in the pending-delete window.
+  const deck = useVisibleDeck(deckId);
+  // Pass the parent deck-set id (may be undefined → hook resolves to
+  // undefined). The hook itself enforces the pending-delete invariant for
+  // deck-sets, which matters here because the deck-set row is rendered as
+  // part of the deck-detail header.
+  const deckSet = useVisibleDeckSet(deck?.deckSetId ?? "");
+  const cards = useVisibleCards(() => db.cards.where("deckId").equals(deckId).toArray(), [deckId]);
 
   // Page-level pending-delete guard: a pending-deleted Deck must NOT remain
-  // navigable during the 10s undo window (ADR-0014 invariant — no read-model
-  // anywhere may surface a row whose pending-delete op is in `pending` or
-  // `committing` state). The deck-list (home) already hides the row, but the
-  // browser back/forward buttons or a stale tab can still land on
-  // `/deck/<id>` directly. Redirect back to home in that case so the user
-  // sees the toast and not the doomed deck.
-  const deckIsPending = store.isPending(`deck:${deckId}`);
+  // navigable during the 10s undo window. `useVisibleDeck` already hides the
+  // row (returns `undefined`); we additionally redirect back to home so the
+  // user sees the toast and not a "Deck nicht gefunden" branch glued open
+  // by browser back/forward.
+  const deckIsPending = useDeckIsPending(deckId);
   useEffect(() => {
     if (deckIsPending) {
       void navigate({ to: "/" });
@@ -59,10 +50,6 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
       </section>
     );
   }
-
-  // Optimistic hide: filter out cards that have a pending-delete op.
-  const visibleCards =
-    cards === undefined ? undefined : cards.filter((c) => !store.isPending(`card:${c.id}`));
 
   return (
     <section className="space-y-4">
@@ -96,9 +83,9 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
         </Link>
       </div>
 
-      {visibleCards === undefined ? (
+      {cards === undefined ? (
         <p className="text-sm text-slate-500">Lade Cards…</p>
-      ) : visibleCards.length === 0 ? (
+      ) : cards.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
           <p className="mb-3 text-slate-600 dark:text-slate-400">Noch keine Cards angelegt.</p>
           <Link to="/deck/$deckId/card/new" params={{ deckId: deck.id }}>
@@ -107,7 +94,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-          {visibleCards.map((card) => (
+          {cards.map((card) => (
             <li
               key={card.id}
               className="flex items-center justify-between gap-2 px-3 py-2 min-h-[44px]"
@@ -156,4 +143,19 @@ function firstLine(markdown: string): string {
     .replace(/^#+\s*/, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "[Bild]")
     .trim();
+}
+
+/**
+ * Helper for the page-level redirect guard — subscribes to the
+ * pending-deletes store and reports whether the deck row is hidden by the
+ * visibility filter. Lives here (not in `pending-deletes-react.ts`) because
+ * it is a per-callsite UX decision (redirect vs render-empty); the invariant
+ * itself is enforced by `useVisibleDeck`.
+ */
+function useDeckIsPending(deckId: string): boolean {
+  // We subscribe through `useVisibleDeck`'s machinery indirectly via
+  // `getPendingDeletes().isPending`. To avoid duplicating
+  // `usePendingDeletes()` (and to keep the redirect tight), we read the
+  // store inline; the parent component already subscribes via `useVisibleDeck`.
+  return getPendingDeletes().isPending(`deck:${deckId}`);
 }

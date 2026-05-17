@@ -5,19 +5,26 @@ import { moveDeckToSetInDb, updateDeckInDb } from "@/db/decks";
 import { deleteDeckWithCascade, restoreDeletedDeck } from "@/db/deletion";
 import { DeckForm } from "@/features/deck/deck-form";
 import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useVisibleCards, useVisibleDeck, useVisibleDeckSets } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 
 export function DeckSettingsPage({ deckId }: { deckId: string }) {
   const navigate = useNavigate();
-  const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
-  const deckSets = useLiveQuery(() => db.deckSets.orderBy("name").toArray(), [], []);
-  const cardCount = useLiveQuery(
-    () => db.cards.where("deckId").equals(deckId).count(),
+  // ADR-0014: route all entity-table reads through the visibility-filtered
+  // hooks so a pending-deleted deck (or a pending-deleted deck-set in the
+  // picker) cannot surface here. The grep-audit invariant
+  // (`useLiveQuery(...) => db.(decks|deckSets|cards). …`) means even
+  // `.count()` reads must go through the hooks — we materialise the array
+  // and read `.length` instead of relying on Dexie's `.count()`.
+  const deck = useVisibleDeck(deckId);
+  const deckSets = useVisibleDeckSets(() => db.deckSets.orderBy("name").toArray(), [], []);
+  const deckCards = useVisibleCards(
+    () => db.cards.where("deckId").equals(deckId).toArray(),
     [deckId],
-    0,
+    [],
   );
+  const cardCount = deckCards.length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);

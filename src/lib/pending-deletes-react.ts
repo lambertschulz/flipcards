@@ -1,4 +1,7 @@
+import { db } from "@/db/database";
+import type { CardRow, DeckRow, DeckSetRow } from "@/db/database";
 import { type PendingDeletesStore, type PendingOp, getPendingDeletes } from "@/lib/pending-deletes";
+import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useSyncExternalStore } from "react";
 
 /**
@@ -45,4 +48,174 @@ export function usePendingDeletesLifecycle(store: PendingDeletesStore = getPendi
   useEffect(() => {
     return store.installLifecycleListeners();
   }, [store]);
+}
+
+// ---------------------------------------------------------------------------
+// Visibility-filtered Dexie hooks — the *only* sanctioned way to read
+// `decks` / `deckSets` / `cards` from Dexie inside a feature component.
+//
+// ADR-0014 invariant (mandatory architectural enforcement):
+//   No read-model anywhere in the app may surface a row whose pending-delete
+//   op is in `pending` or `committing` state — neither the directly-deleted
+//   entity nor any cascade descendant.
+//
+// Each pair (`useVisibleX` for entity-by-id, `useVisibleXs` for list/picker
+// queries) calls `usePendingDeletes()` internally so a caller cannot forget
+// to subscribe to the store — the moment an op flips state, every component
+// using these hooks re-renders.
+//
+// To enforce the invariant we maintain a `git grep` audit (see
+// `pending-deletes-react.audit.test.ts`): every `useLiveQuery` call against
+// `db.decks` / `db.deckSets` / `db.cards` outside this file MUST go through
+// one of the hooks below. New callsites that re-introduce a raw
+// `useLiveQuery(() => db.decks. …)` will fail that test.
+// ---------------------------------------------------------------------------
+
+// `dexie-react-hooks`' `useLiveQuery` returns `T | undefined` while the query
+// is in flight; we propagate that to the caller so the loading state survives
+// our filter. A null default keeps callers' existing `loading vs not-found`
+// distinction working (some pages pass `null` for "still loading").
+
+// Match Dexie's `useLiveQuery` deps type (mutable `any[]`).
+type LiveQueryDeps = unknown[];
+
+/**
+ * Read a single Deck by id, returning `undefined` when its `deck:<id>` op
+ * is in the pending-delete window. Use this on every detail/settings page.
+ */
+export function useVisibleDeck(
+  id: string,
+  fallback: DeckRow | null = null,
+): DeckRow | null | undefined {
+  // Subscribe so the component re-renders when the pending-deletes store
+  // transitions (pending → committing → committed / undone). The hide
+  // predicate below reads through `store.isPending`, which already covers
+  // both `pending` and `committing`.
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const row = useLiveQuery(() => db.decks.get(id), [id], fallback);
+  if (row && store.isPending(`deck:${id}`)) return undefined;
+  return row;
+}
+
+/**
+ * Read a single Deck-Set by id, returning `undefined` when its
+ * `deck-set:<id>` op is in the pending-delete window.
+ */
+export function useVisibleDeckSet(
+  id: string,
+  fallback: DeckSetRow | null = null,
+): DeckSetRow | null | undefined {
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const row = useLiveQuery(() => db.deckSets.get(id), [id], fallback);
+  if (row && store.isPending(`deck-set:${id}`)) return undefined;
+  return row;
+}
+
+/**
+ * Read a single Card by id, returning `undefined` when either its own
+ * `card:<id>` op or its parent `deck:<deckId>` op is in the pending-delete
+ * window (the deck-delete cascade marks each child `card:<id>` too, but we
+ * also defend against a caller that enqueued without the cascade keys).
+ */
+export function useVisibleCard(
+  id: string,
+  fallback: CardRow | null = null,
+): CardRow | null | undefined {
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const row = useLiveQuery(() => db.cards.get(id), [id], fallback);
+  if (!row) return row;
+  if (store.isPending(`card:${id}`)) return undefined;
+  if (store.isPending(`deck:${row.deckId}`)) return undefined;
+  return row;
+}
+
+/**
+ * Read a list of Decks via a Dexie query thunk, then filter out every row
+ * whose `deck:<id>` is in the pending-delete window. Use this for every
+ * list/picker that touches `db.decks`.
+ *
+ * The query thunk and `deps` are passed through to `useLiveQuery` verbatim,
+ * so existing call patterns (`() => db.decks.orderBy("name").toArray()`,
+ * `() => db.decks.where("deckSetId").equals(id).toArray()`, etc.) work
+ * unchanged. The `initialValue` overload is preserved: passing `[]` keeps
+ * the return type as `DeckRow[]` (no `undefined`) and matches `useLiveQuery`'s
+ * existing surface.
+ */
+export function useVisibleDecks(
+  query: () => Promise<DeckRow[]> | DeckRow[],
+  deps?: LiveQueryDeps,
+): DeckRow[] | undefined;
+export function useVisibleDecks(
+  query: () => Promise<DeckRow[]> | DeckRow[],
+  deps: LiveQueryDeps,
+  initialValue: DeckRow[],
+): DeckRow[];
+export function useVisibleDecks(
+  query: () => Promise<DeckRow[]> | DeckRow[],
+  deps: LiveQueryDeps = [],
+  initialValue?: DeckRow[],
+): DeckRow[] | undefined {
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const rows = useLiveQuery(query, deps, initialValue as DeckRow[] | undefined);
+  if (rows === undefined) return undefined;
+  return rows.filter((d) => !store.isPending(`deck:${d.id}`));
+}
+
+/**
+ * Read a list of Deck-Sets via a Dexie query thunk, then filter out every
+ * row whose `deck-set:<id>` is in the pending-delete window.
+ */
+export function useVisibleDeckSets(
+  query: () => Promise<DeckSetRow[]> | DeckSetRow[],
+  deps?: LiveQueryDeps,
+): DeckSetRow[] | undefined;
+export function useVisibleDeckSets(
+  query: () => Promise<DeckSetRow[]> | DeckSetRow[],
+  deps: LiveQueryDeps,
+  initialValue: DeckSetRow[],
+): DeckSetRow[];
+export function useVisibleDeckSets(
+  query: () => Promise<DeckSetRow[]> | DeckSetRow[],
+  deps: LiveQueryDeps = [],
+  initialValue?: DeckSetRow[],
+): DeckSetRow[] | undefined {
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const rows = useLiveQuery(query, deps, initialValue as DeckSetRow[] | undefined);
+  if (rows === undefined) return undefined;
+  return rows.filter((s) => !store.isPending(`deck-set:${s.id}`));
+}
+
+/**
+ * Read a list of Cards via a Dexie query thunk, then filter out every row
+ * whose `card:<id>` *or* parent `deck:<deckId>` is in the pending-delete
+ * window. The deck-delete cascade already stamps `card:<id>` for each
+ * child, but the additional `deck:<deckId>` check is a defence in depth
+ * against future callers that enqueue without cascade keys.
+ */
+export function useVisibleCards(
+  query: () => Promise<CardRow[]> | CardRow[],
+  deps?: LiveQueryDeps,
+): CardRow[] | undefined;
+export function useVisibleCards(
+  query: () => Promise<CardRow[]> | CardRow[],
+  deps: LiveQueryDeps,
+  initialValue: CardRow[],
+): CardRow[];
+export function useVisibleCards(
+  query: () => Promise<CardRow[]> | CardRow[],
+  deps: LiveQueryDeps = [],
+  initialValue?: CardRow[],
+): CardRow[] | undefined {
+  usePendingDeletes();
+  const store = getPendingDeletes();
+  const rows = useLiveQuery(query, deps, initialValue as CardRow[] | undefined);
+  if (rows === undefined) return undefined;
+  return rows.filter(
+    (c) => !store.isPending(`card:${c.id}`) && !store.isPending(`deck:${c.deckId}`),
+  );
 }

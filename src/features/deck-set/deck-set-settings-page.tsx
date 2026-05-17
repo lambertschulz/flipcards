@@ -5,18 +5,23 @@ import { updateDeckSetInDb } from "@/db/deck-sets";
 import { deleteDeckSetWithCascade, restoreDeletedDeckSet } from "@/db/deletion";
 import { DeckSetForm } from "@/features/deck-set/deck-set-form";
 import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useVisibleDeckSet, useVisibleDecks } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 
 export function DeckSetSettingsPage({ deckSetId }: { deckSetId: string }) {
   const navigate = useNavigate();
-  const set = useLiveQuery(() => db.deckSets.get(deckSetId), [deckSetId], null);
-  const memberCount = useLiveQuery(
-    () => db.decks.where("deckSetId").equals(deckSetId).count(),
+  // ADR-0014: every entity-table read routes through the visibility-filtered
+  // hooks. The grep-audit invariant covers `.count()` reads too, so we
+  // materialise the member-deck array and read `.length` instead of using
+  // Dexie's `.count()` shortcut.
+  const set = useVisibleDeckSet(deckSetId);
+  const memberDecks = useVisibleDecks(
+    () => db.decks.where("deckSetId").equals(deckSetId).toArray(),
     [deckSetId],
-    0,
+    [],
   );
+  const memberCount = memberDecks.length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);

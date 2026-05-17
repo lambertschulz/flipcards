@@ -351,3 +351,48 @@ describe("Empty Deck-Sets survive removal of their last member (ADR-0014)", () =
     await screen.findByText("Solo-Set");
   });
 });
+
+// --- Corpse-page invariant: navigating to /deck-set/<id> after the delete
+// was enqueued must render `nicht gefunden`, not the doomed entity. This
+// regression mirrors the round-3 sharpened-brief requirement for the
+// `useVisibleDeckSet` hook on the detail page.
+
+describe("Deck-Set detail page hides pending-deleted set (ADR-0014 round 3)", () => {
+  beforeEach(async () => {
+    await db.open();
+    __resetPendingDeletesForTests();
+  });
+
+  afterEach(async () => {
+    await db.cards.clear();
+    await db.decks.clear();
+    await db.deckSets.clear();
+    await db.reviewStates.clear();
+    __resetPendingDeletesForTests();
+  });
+
+  it("renders the not-found branch when navigating directly to /deck-set/<id> while a pending-delete op for that set is live", async () => {
+    const set = await createDeckSetInDb({ name: "Sprachen-Doomed" });
+    const member = await createDeckInDb({ name: "Latein" });
+    await addDeckToSetInDb(member.id, set.id);
+
+    // Enqueue the pending-delete op BEFORE the route mounts — mimics the
+    // "stale tab / browser back" scenario the brief calls out: the user
+    // confirmed the delete on settings-page, then before the 10s window
+    // expires they navigate back into the now-doomed set via direct URL.
+    getPendingDeletes().enqueue({
+      key: `deck-set:${set.id}`,
+      label: "Deck-Set entfernt",
+      commit: async () => {},
+      restore: async () => {},
+    });
+
+    const router = await setupDeckSetDetailRouter(set.id);
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText("Deck-Set nicht gefunden");
+    // The doomed set's name and member deck must not be reachable in the DOM.
+    expect(screen.queryByText("Sprachen-Doomed")).toBeNull();
+    expect(screen.queryByText("Latein")).toBeNull();
+  });
+});

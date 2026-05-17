@@ -1,14 +1,15 @@
-import { db } from "@/db/database";
 import { listDueCardsInDeck } from "@/db/review-states";
 import { ReviewSessionRunner } from "@/features/review/review-session-runner";
 import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useVisibleDeck } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useCallback } from "react";
 
 export function ReviewSessionPage({ deckId }: { deckId: string }) {
   const navigate = useNavigate();
-  const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
+  // ADR-0014: a pending-deleted deck must surface as "not found" so the
+  // session doesn't render against a doomed deck during the 10s window.
+  const deck = useVisibleDeck(deckId);
 
   const backToDeck = useCallback(
     () => navigate({ to: "/deck/$deckId", params: { deckId } }),

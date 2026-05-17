@@ -1,10 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { addDeckToSetInDb, removeDeckFromSetInDb } from "@/db/deck-sets";
-import { getPendingDeletes } from "@/lib/pending-deletes";
-import { usePendingDeletes } from "@/lib/pending-deletes-react";
+import { useVisibleDeckSet, useVisibleDecks } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 
 /**
@@ -13,26 +11,21 @@ import { useState } from "react";
  * (lose decks and decks from other sets — picking one of the latter moves
  * it, per ADR-0003). Removing the last deck leaves the set empty and
  * intact (ADR-0014).
+ *
+ * Reads go through the visibility-filtered hooks in
+ * `@/lib/pending-deletes-react` (ADR-0014 invariant): pending-deleted
+ * deck-sets and pending-deleted member/addable decks must not surface here.
  */
 export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
-  const set = useLiveQuery(() => db.deckSets.get(deckSetId), [deckSetId], null);
-  const memberDecks = useLiveQuery(
+  const set = useVisibleDeckSet(deckSetId);
+  const memberDecks = useVisibleDecks(
     () => db.decks.where("deckSetId").equals(deckSetId).toArray(),
     [deckSetId],
-    undefined,
   );
-  const addableDecks = useLiveQuery(
+  const addableDecks = useVisibleDecks(
     () => db.decks.filter((d) => d.deckSetId !== deckSetId).toArray(),
     [deckSetId],
-    undefined,
   );
-
-  // Subscribe + filter via `store.isPending` — both the member list and the
-  // picker hide decks whose hard-delete is mid-flight (ADR-0014). Hiding the
-  // deck-set itself is the parent route's concern; here we only worry about
-  // pending-deleted member/addable decks.
-  usePendingDeletes();
-  const pendingStore = getPendingDeletes();
 
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -50,14 +43,8 @@ export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
     );
   }
 
-  const sortedMembers = (memberDecks ?? [])
-    .filter((d) => !pendingStore.isPending(`deck:${d.id}`))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const sortedAddable = (addableDecks ?? [])
-    .filter((d) => !pendingStore.isPending(`deck:${d.id}`))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const sortedMembers = (memberDecks ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const sortedAddable = (addableDecks ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <section className="space-y-4">

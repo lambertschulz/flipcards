@@ -423,14 +423,19 @@ describe("Cascade-key invariant — ReviewSessionPage `listDueCardsInDeck`", () 
     expect(screen.queryByText("Front-Pending")).toBeNull();
   });
 
-  it("treats the session as empty when the deck itself is pending-deleted", async () => {
+  it("renders the not-found branch when the deck itself is pending-deleted (no corpse page)", async () => {
+    // Round-3 sharpened brief: detail/settings pages that load an entity by
+    // id must surface the pending-deleted state as `nicht gefunden` instead
+    // of rendering against a doomed row. `useVisibleDeck` enforces this for
+    // the per-deck review page — the session never starts because the page
+    // never advances past the `Deck nicht gefunden` branch.
     const deck = await createDeckInDb({ name: "Deck" });
     await seedDueCard({ deckId: deck.id, front: "Front-Doomed" });
 
     const store = getPendingDeletes();
     store.enqueue({
       key: `deck:${deck.id}`,
-      cascadeKeys: [], // intentionally empty — the deck-level guard alone must short-circuit
+      cascadeKeys: [],
       label: "Deck gelöscht",
       commit: async () => {},
       restore: async () => {},
@@ -439,10 +444,8 @@ describe("Cascade-key invariant — ReviewSessionPage `listDueCardsInDeck`", () 
     const router = await setupDeckReviewRouter(deck.id);
     render(<RouterProvider router={router} />);
 
-    const startBtn = await screen.findByRole("button", { name: /Open-ended/i });
-    startBtn.click();
-
-    await screen.findByText(/Keine Cards fällig/i);
+    await screen.findByText(/Deck nicht gefunden/i);
+    expect(screen.queryByText("Front-Doomed")).toBeNull();
   });
 });
 

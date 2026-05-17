@@ -10,8 +10,7 @@ import {
   computeHomeSummary,
 } from "@/features/home/home-read-model";
 import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
-import { getPendingDeletes } from "@/lib/pending-deletes";
-import { usePendingDeletes } from "@/lib/pending-deletes-react";
+import { useVisibleCards, useVisibleDeckSets, useVisibleDecks } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useMemo, useState } from "react";
@@ -99,44 +98,28 @@ function useNow(intervalMs = 60_000): number {
  * disabled. Wiring is the respective import-feature ticket's responsibility.
  */
 export function HomePage() {
-  const decks = useLiveQuery(() => db.decks.orderBy("name").toArray(), [], undefined);
-  const deckSets = useLiveQuery(() => db.deckSets.orderBy("name").toArray(), [], undefined);
-  const cards = useLiveQuery(() => db.cards.toArray(), [], undefined);
+  // All entity-table reads go through the visibility-filtered hooks
+  // (`useVisibleDecks` / `useVisibleDeckSets` / `useVisibleCards`) so the
+  // ADR-0014 invariant — no read-model surfaces a row whose pending-delete
+  // op is in `pending` or `committing` state, including cascade descendants
+  // — is enforced uniformly. These hooks subscribe to the pending-deletes
+  // store internally, so any op transition (pending → committing →
+  // committed / undone) re-renders this component without an extra
+  // `usePendingDeletes()` call.
+  const visibleDecks = useVisibleDecks(() => db.decks.orderBy("name").toArray(), []);
+  const visibleDeckSets = useVisibleDeckSets(() => db.deckSets.orderBy("name").toArray(), []);
+  const visibleCards = useVisibleCards(() => db.cards.toArray(), []);
+  // `reviewStates` is not subject to the pending-delete invariant — review
+  // states for a pending-deleted card aren't *rendered*, only consumed by the
+  // due-count read-model, which iterates `visibleCards`. Stale entries are
+  // a no-op until they're filtered by the cascade commit.
   const reviewStates = useLiveQuery(() => db.reviewStates.toArray(), [], undefined);
 
-  // Subscribe to the pending-deletes store so the home screen re-renders when
-  // ops transition through `pending → committing → committed`. Every read
-  // path below is filtered via `store.isPending(key)` — see ADR-0014: no
-  // read-model anywhere in the app may surface a row whose pending-delete op
-  // is in `pending` or `committing` state, including cascade descendants
-  // (`card:<id>` keys carried by a deck-delete op).
-  usePendingDeletes();
-  const pendingStore = getPendingDeletes();
-
   const loading =
-    decks === undefined ||
-    deckSets === undefined ||
-    cards === undefined ||
+    visibleDecks === undefined ||
+    visibleDeckSets === undefined ||
+    visibleCards === undefined ||
     reviewStates === undefined;
-
-  // Plain filters (not useMemo) — `usePendingDeletes()` already re-runs the
-  // component on every store transition, and the snapshot is small enough
-  // that filtering each render is cheaper than memo bookkeeping (and avoids a
-  // stale-memo bug: the singleton store has a stable reference, so a useMemo
-  // keyed only on `decks`/`cards` wouldn't recompute when the store flips an
-  // op into `committing`, briefly flashing the row back into the list).
-  const visibleDecks = (decks ?? []).filter((d) => !pendingStore.isPending(`deck:${d.id}`));
-  const visibleDeckSets = (deckSets ?? []).filter(
-    (s) => !pendingStore.isPending(`deck-set:${s.id}`),
-  );
-  // Cards are filtered both by their own pending key (single-card delete) and
-  // by their parent deck's pending key (deck-delete cascade — the coordinator
-  // also stamps each child `card:<id>` as pending, so the first check covers
-  // both, but filtering on `deck:<id>` too keeps the read consistent even if
-  // a future caller forgets to pass cascade keys when enqueueing).
-  const visibleCards = (cards ?? []).filter(
-    (c) => !pendingStore.isPending(`card:${c.id}`) && !pendingStore.isPending(`deck:${c.deckId}`),
-  );
 
   // `now` ticks on a visibility-aware 60 s interval (see `useNow`). Dexie
   // live-queries only re-run on writes, so a wall-clock tick is needed to
@@ -159,13 +142,14 @@ export function HomePage() {
 
   const decksWithCounts: DeckWithCounts[] = loading
     ? []
-    : computeDecksWithCounts(visibleDecks, visibleCards, stateLookup, now);
+    : computeDecksWithCounts(visibleDecks ?? [], visibleCards ?? [], stateLookup, now);
 
   const summary: HomeSummary = loading
     ? { totalDue: 0, decksWithDue: 0 }
-    : computeHomeSummary(visibleCards, stateLookup, now);
+    : computeHomeSummary(visibleCards ?? [], stateLookup, now);
 
-  const hasAny = !loading && (visibleDecks.length > 0 || visibleDeckSets.length > 0);
+  const hasAny =
+    !loading && ((visibleDecks ?? []).length > 0 || (visibleDeckSets ?? []).length > 0);
 
   return (
     <section className="space-y-4">
@@ -180,7 +164,7 @@ export function HomePage() {
       ) : (
         <>
           <TodayResume summary={summary} />
-          <DeckGroups decks={decksWithCounts} deckSets={visibleDeckSets} />
+          <DeckGroups decks={decksWithCounts} deckSets={visibleDeckSets ?? []} />
         </>
       )}
 
