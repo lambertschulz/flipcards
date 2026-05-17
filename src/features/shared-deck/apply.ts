@@ -56,17 +56,33 @@ export type ApplySummary = {
 };
 
 export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySummary> {
-  // ADR-0014 class (b) — bulk-replace path. Even though shared-deck import
-  // is *additive* (not clean-slate), it still issues `bulkPut`/`bulkDelete`
-  // against `cards` and the per-card-progress tables. A deferred delete in
-  // the pending-delete coordinator (10s undo window) whose key collides
-  // with an incoming card-id would otherwise fire AFTER the import lands
-  // and silently re-delete the freshly-imported row. `cancelAll()` discards
-  // pending ops without committing and awaits any commit already in flight.
-  // This must run *before* the transaction opens — the coordinator owns
-  // its own Dexie writes (via the deletion-coordinator commit thunks) and
-  // they cannot be nested inside our `rw` transaction.
-  await getPendingDeletes().cancelAll();
+  // ADR-0014 — pending-delete coordinator drain. Shared-deck import is
+  // *additive* (it does not clobber existing data the way backup-restore /
+  // global-wipe do), so the correct primitive here is `flushAll()`, NOT
+  // `cancelAll()`:
+  //
+  //   - `cancelAll()` discards every pending delete without committing.
+  //     That's right for *replace-all* paths (backup restore, global wipe)
+  //     because those paths are about to overwrite the DB wholesale —
+  //     committing a stale pending delete first would just delete a row
+  //     the bulk-replace is about to write back. But for an additive path
+  //     it would silently undo the user's *unrelated* delete intent during
+  //     the 10s undo window — the user clicked "Delete card", then imported
+  //     a shared deck on a different card-id, and their delete vanishes.
+  //
+  //   - `flushAll()` commits every pending delete now. The import then runs
+  //     against a consistent view of "current data": rows the user intended
+  //     to delete are gone, the global card-ID set below reflects that, and
+  //     a card-id collision with a just-deleted row is resolved cleanly
+  //     (the row is gone → not in `globalCardIds` → the imported card lands
+  //     as a new row). The user's delete intent is honoured.
+  //
+  // This must run *before* the transaction opens — the coordinator's commit
+  // thunks own their own Dexie writes and cannot be nested inside our `rw`
+  // transaction. `flushAll()` awaits both freshly-kicked-off and already-
+  // in-flight commits, so when it resolves the per-card-progress tables and
+  // the cards table are settled for the global card-ID scan below.
+  await getPendingDeletes().flushAll();
 
   // Single rw-transaction spanning every table this function may touch.
   // The brief enumerates these explicitly so the table-set is derived from

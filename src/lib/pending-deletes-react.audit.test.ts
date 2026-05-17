@@ -97,10 +97,22 @@ function filterLeaks(matches: string[]): string[] {
 // bulk-replace site (`db.{table}.{clear,bulkPut,bulkAdd,bulkDelete}`) must
 // either be inside the deletion-coordinator's own transactions
 // (`src/db/deletion.ts`, the canonical sink for committing pending deletes)
-// or in a file that also calls `cancelAll()` (the canonical "drain the
-// coordinator before clobbering the DB" hook). Catching new bulk-replace
-// callsites that forget to drain is the architectural enforcement of
-// ADR-0014 class (b).
+// or in a file that drains the coordinator before mutating. The drain
+// primitive depends on the op's class:
+//
+//   - Replace-all paths (backup restore, global wipe, any future clean-
+//     slate-replace import) drain via `cancelAll()` — discard pending
+//     deletes without committing, because the bulk-replace is about to
+//     overwrite the DB anyway and committing first would just delete a
+//     row the replace is about to write back.
+//   - Additive paths (shared-deck import) drain via `flushAll()` — commit
+//     pending deletes first so the additive op runs against a consistent
+//     view of "current data" and doesn't silently undo the user's
+//     unrelated delete intent during the 10s undo window.
+//
+// Either drain call satisfies the audit. The architectural enforcement is
+// that *some* drain happened; choosing the right primitive is a code-review
+// concern, documented in the module header of `src/lib/pending-deletes.ts`.
 //
 // The pattern: `db.<table>.{clear|bulkPut|bulkAdd|bulkDelete}(`. We list
 // the destructive verbs explicitly; non-destructive verbs (`put`, `add`,
@@ -108,20 +120,21 @@ function filterLeaks(matches: string[]): string[] {
 // trigger the contract.
 const BULK_REPLACE_PATTERN = String.raw`db\.(decks|deckSets|cards|reviewStates|reviews)\.(clear|bulkPut|bulkAdd|bulkDelete)\(`;
 
-// Files where bulk-replace ops are sanctioned without a `cancelAll()` call,
-// because they are themselves the implementation of the coordinator's
-// commit/restore thunks (`src/db/deletion.ts`) or they're test fixtures
-// (filtered separately by extension).
+// Files where bulk-replace ops are sanctioned without an explicit drain
+// call, because they are themselves the implementation of the
+// coordinator's commit/restore thunks (`src/db/deletion.ts`) or they're
+// test fixtures (filtered separately by extension).
 const SANCTIONED_BULK_FILES = new Set(["src/db/deletion.ts"]);
 
-function fileHasCancelAll(file: string): boolean {
-  // Files that opt into the contract must mention `cancelAll(` somewhere.
-  // We're not parsing the call graph — the grep is the audit, and a
-  // mention is sufficient evidence that the maintainer thought about it.
+function fileDrainsCoordinator(file: string): boolean {
+  // Files that opt into the contract must mention either `cancelAll(`
+  // (replace-all path) or `flushAll(` (additive path) somewhere. We're not
+  // parsing the call graph — the grep is the audit, and a mention is
+  // sufficient evidence that the maintainer chose a drain primitive.
   try {
     const out = execFileSync(
       "git",
-      ["grep", "-l", "cancelAll(", "--", path.resolve(REPO_ROOT, file)],
+      ["grep", "-lE", "cancelAll\\(|flushAll\\(", "--", path.resolve(REPO_ROOT, file)],
       { cwd: REPO_ROOT, encoding: "utf8" },
     );
     return out.trim().length > 0;
@@ -150,14 +163,20 @@ describe("pending-delete grep audit (ADR-0014)", () => {
 
   it("every destructive bulk-replace site drains the pending-delete coordinator", () => {
     // Round-4 invariant (ADR-0014 class (b)): any file that calls
-    // `db.<table>.{clear|bulkPut|bulkAdd|bulkDelete}` must also call
-    // `cancelAll()` (the canonical drain hook), OR be the deletion
-    // coordinator itself (which IS the sink for pending-delete commits).
+    // `db.<table>.{clear|bulkPut|bulkAdd|bulkDelete}` must also drain the
+    // pending-delete coordinator — either `cancelAll()` (replace-all
+    // paths: backup restore, global wipe) or `flushAll()` (additive
+    // paths: shared-deck import) — OR be the deletion coordinator itself
+    // (`src/db/deletion.ts`, which IS the sink for pending-delete
+    // commits).
     //
-    // Why this matters: a deferred delete whose primary key collides with
-    // a row that a backup-import is about to write would otherwise fire
-    // (after its 10s timer) onto the freshly-imported data and silently
-    // delete it. `cancelAll()` discards the pending op without committing.
+    // Why this matters: a deferred delete whose primary key collides
+    // with a row that a bulk-replace is about to write would otherwise
+    // fire (after its 10s timer) onto the freshly-written data and
+    // silently delete it. `cancelAll()` discards the pending op without
+    // committing; `flushAll()` commits it first so the bulk op sees a
+    // consistent post-delete view. See the module header of
+    // `src/lib/pending-deletes.ts` for which to use when.
     const matches = gitGrep(BULK_REPLACE_PATTERN);
     const offenders: string[] = [];
     const filesSeen = new Set<string>();
@@ -167,7 +186,9 @@ describe("pending-delete grep audit (ADR-0014)", () => {
       if (SANCTIONED_BULK_FILES.has(file)) continue;
       if (filesSeen.has(file)) continue;
       filesSeen.add(file);
-      if (!fileHasCancelAll(file)) offenders.push(`${file} — missing cancelAll() drain call`);
+      if (!fileDrainsCoordinator(file)) {
+        offenders.push(`${file} — missing cancelAll() / flushAll() drain call`);
+      }
     }
     expect(offenders, offenders.join("\n")).toEqual([]);
   });

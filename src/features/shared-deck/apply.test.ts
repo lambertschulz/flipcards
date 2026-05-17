@@ -356,43 +356,95 @@ describe("applySharedDeckImport — frisch importierte Cards sind sofort due", (
 });
 
 describe("applySharedDeckImport — pending-delete coordinator drain (ADR-0014)", () => {
-  it("drains the pending-delete coordinator before mutating the DB (class (b))", async () => {
-    // ADR-0014 class (b): destructive bulk-replace paths must call
-    // `cancelAll()` BEFORE mutating the DB. The risk this regression pins:
-    // a deferred delete whose primary key collides with an incoming
-    // card-id would otherwise fire (10s timer pops, or `visibilitychange`
-    // calls `flushAll`) and silently delete the freshly-imported row.
+  it("flushes the pending-delete coordinator before mutating the DB (additive path)", async () => {
+    // Shared-deck import is *additive* (not clean-slate-replace), so the
+    // correct drain primitive is `flushAll()`, not `cancelAll()`:
     //
-    // Setup: enqueue a pending delete keyed on a card-id that the import
-    // file also introduces. After the import resolves, the pending op
-    // must have been discarded (cancelAll, not flushAll) and the imported
-    // card must be present.
+    //   - `cancelAll()` (used by backup-restore / global-wipe) discards
+    //     pending deletes without committing. Using it here would silently
+    //     undo the user's UNRELATED delete intent during the 10s undo
+    //     window — they clicked "Delete card", then imported a shared deck,
+    //     and their delete vanishes.
+    //   - `flushAll()` commits every pending delete first, so the import
+    //     runs against a consistent view of "current data".
+    //
+    // This regression pins both halves of the contract:
+    //   (a) the pending delete's commit thunk IS called (flush, not cancel)
+    //       before the import lands its rows; and
+    //   (b) the imported card lands alongside the now-committed delete
+    //       result. The pending op is keyed on an UNRELATED card-id so it
+    //       cannot mask the import — the test would otherwise be ambiguous
+    //       between "import wrote then delete clobbered" and "delete first,
+    //       then import wrote", which is exactly the ordering bug.
     const { getPendingDeletes, __resetPendingDeletesForTests } = await import(
       "@/lib/pending-deletes"
     );
     __resetPendingDeletesForTests();
     const store = getPendingDeletes();
 
-    const commit = vi.fn().mockResolvedValue(undefined);
+    // Seed an unrelated local card; the pending op will commit-delete it.
+    // The order assertion below pins flush-before-import: when the import's
+    // global card-ID scan runs, this card must already be gone.
+    await db.decks.add({ id: "deck-other", name: "Andere" });
+    await db.cards.add({
+      id: "card-pending-del",
+      deckId: "deck-other",
+      front: "x",
+      back: "y",
+      tags: [],
+    });
+
+    // Record the order in which the pending commit and the import's
+    // first DB write happen, so the test proves flush-BEFORE-import.
+    const events: string[] = [];
+    const commit = vi.fn().mockImplementation(async () => {
+      events.push("commit");
+      // Actually delete the row, so the import's global card-ID scan sees
+      // a DB without `card-pending-del` — the consistent-view guarantee.
+      await db.cards.delete("card-pending-del");
+    });
     store.enqueue({
-      key: "card:card-share001",
+      key: "card:card-pending-del",
       label: "Card gelöscht",
       commit,
       restore: async () => {},
     });
     expect(store.list()).toHaveLength(1);
 
+    // Spy on the cards.bulkPut Dexie verb to record "import" in the same
+    // ordering log. `bulkPut` is the first write the import does to the
+    // cards table; if it fires before `commit`, flush-before-import is
+    // violated. We call through to the original via `apply` rather than
+    // re-typing Dexie's overloaded signature.
+    const originalBulkPut = db.cards.bulkPut.bind(db.cards);
+    const bulkPutSpy = vi.spyOn(db.cards, "bulkPut");
+    bulkPutSpy.mockImplementation(((...args: unknown[]) => {
+      events.push("import");
+      return (originalBulkPut as (...a: unknown[]) => unknown)(...args);
+    }) as unknown as typeof db.cards.bulkPut);
+
     await applySharedDeckImport(makeFile());
 
-    // Deferred commit was discarded, not run.
-    expect(commit).not.toHaveBeenCalled();
-    expect(store.list()).toHaveLength(0);
-    expect(store.isPending("card:card-share001")).toBe(false);
+    bulkPutSpy.mockRestore();
 
-    // Imported card is present — the pending op did NOT delete it.
-    const imported = await db.cards.get("card-share001");
-    expect(imported).toBeDefined();
-    expect(imported?.front).toBe("bonjour");
+    // (a) Pending commit thunk WAS called — flush, not cancel.
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(store.list()).toHaveLength(0);
+    expect(store.isPending("card:card-pending-del")).toBe(false);
+
+    // (a, ordering) Commit ran BEFORE the import's first bulkPut. This is
+    // the "flush-before-import" assertion the codex review asked for.
+    expect(events).toEqual(["commit", "import"]);
+
+    // (b) Imported cards landed alongside the now-committed delete result:
+    //   - the previously-pending row is gone (commit ran);
+    //   - the imported rows are present.
+    expect(await db.cards.get("card-pending-del")).toBeUndefined();
+    const importedA = await db.cards.get("card-share001");
+    expect(importedA).toBeDefined();
+    expect(importedA?.front).toBe("bonjour");
+    const importedB = await db.cards.get("card-share002");
+    expect(importedB).toBeDefined();
 
     __resetPendingDeletesForTests();
   });

@@ -30,14 +30,32 @@
 //       non-React reads). Never query Dexie for one of the three entity
 //       tables and surface the result without first filtering by
 //       `isPending`.
-//   (b) **Destructive bulk-replace paths** (backup restore, global wipe,
-//       any future clean-slate-replace import) must call `cancelAll()`
-//       BEFORE mutating the DB. The semantics: pending ops were never
-//       committed — they hold a deferred `commit()` thunk; calling
-//       `cancelAll()` discards those thunks so they cannot fire onto a
-//       freshly-imported row whose ID happens to collide. `flushAll()` is
-//       the wrong tool for this — it *commits* the deferred deletes,
-//       which is fine for tab-close but is data loss for bulk-replace.
+//   (b) **Destructive bulk-write paths** must drain the coordinator BEFORE
+//       mutating the DB. Which primitive to use depends on whether the op
+//       is replace-all or additive:
+//
+//         - **Replace-all** (backup restore, global wipe, any future
+//           clean-slate-replace import) calls `cancelAll()`. The
+//           bulk-replace is about to overwrite the DB wholesale — pending
+//           ops were never committed (they hold a deferred `commit()`
+//           thunk), so discarding those thunks leaves the DB ready for
+//           the replace. `flushAll()` is wrong here: it would *commit*
+//           the deferred deletes onto rows the replace is about to write
+//           back, which is data loss.
+//
+//         - **Additive** (shared-deck import) calls `flushAll()`. The op
+//           is not replacing data; it's merging in new rows. Discarding
+//           pending deletes with `cancelAll()` here would silently undo
+//           the user's UNRELATED delete intent during the 10s undo
+//           window — they clicked "Delete card", then imported, and
+//           their delete vanishes. `flushAll()` commits the pending
+//           deletes first so the additive op runs against a consistent
+//           view of "current data".
+//
+//       In both cases the drain must happen before any rw-transaction the
+//       caller opens — the coordinator owns its own Dexie writes via the
+//       commit thunks, and they cannot be nested inside the caller's
+//       transaction.
 //   (c) **Navigate-by-id paths** get pending-deleted entities filtered for
 //       free via the `useVisible*` hooks returning `undefined`. No
 //       additional contract — class (a) covers this transparently.
