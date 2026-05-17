@@ -1,5 +1,5 @@
 import { type DeckSetRow, db } from "@/db/database";
-import { type Deck } from "@/domain/deck";
+import type { Deck } from "@/domain/deck";
 import {
   type DeckSet,
   type DeckSetPatch,
