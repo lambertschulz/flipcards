@@ -9,6 +9,7 @@ import {
   EMPTY_FILTER_STATE,
   isFilterActive,
 } from "@/features/deck/deck-card-filter-bar";
+import { exportSharedDeckToFile } from "@/features/shared-deck/export";
 import { getPendingDeletes } from "@/lib/pending-deletes";
 import { useVisibleCards, useVisibleDeck, useVisibleDeckSet } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -53,6 +54,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
     [cards],
     undefined,
   );
+  const [exporting, setExporting] = useState(false);
 
   // Filter state is page-local and intentionally not persisted across
   // navigation (ticket requirement: avoid "why are only 3 cards here?"
@@ -180,6 +182,22 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
           <Link to="/deck/$deckId/settings" params={{ deckId: deck.id }}>
             <Button variant="outline">Deck-Einstellungen</Button>
           </Link>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try {
+                await exportSharedDeckToFile(deck.id);
+              } finally {
+                setExporting(false);
+              }
+            }}
+            data-testid="deck-export-shared-button"
+          >
+            {exporting ? "Wird exportiert…" : "Deck teilen / exportieren"}
+          </Button>
         </div>
       </div>
 
