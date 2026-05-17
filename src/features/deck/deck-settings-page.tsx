@@ -96,12 +96,20 @@ export function DeckSettingsPage({ deckId }: { deckId: string }) {
           </p>
         }
         onCancel={() => setShowDeleteModal(false)}
-        onConfirm={() => {
+        onConfirm={async () => {
           setShowDeleteModal(false);
+          // Resolve the cascade snapshot BEFORE enqueue: every read-path
+          // (tag-session, per-deck review, due-counts) checks `isPending`
+          // by `card:<id>`, so the coordinator must know which card keys
+          // the pending-deck-delete subsumes from the very first publish
+          // tick. Otherwise a navigation into a session during the 10s
+          // window would still find the doomed cards.
+          const childCardIds = await db.cards.where("deckId").equals(deck.id).primaryKeys();
           const store = getPendingDeletes();
           let snapshot: Awaited<ReturnType<typeof deleteDeckWithCascade>> | null = null;
           store.enqueue({
             key: `deck:${deck.id}`,
+            cascadeKeys: childCardIds.map((id) => `card:${id}`),
             label: `Deck „${deck.name}" gelöscht`,
             commit: async () => {
               snapshot = await deleteDeckWithCascade(deck.id);

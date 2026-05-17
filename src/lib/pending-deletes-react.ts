@@ -25,10 +25,16 @@ export function useIsPendingDelete(
   store: PendingDeletesStore = getPendingDeletes(),
 ): boolean {
   const ops = usePendingDeletes(store);
-  // Match `store.isPending`: hide the row both while pending (hold window)
-  // and while the commit is in flight, so the row doesn't briefly flash
-  // back into the list between those two states.
-  return ops.some((o) => o.key === key && (o.state === "pending" || o.state === "committing"));
+  // Match `store.isPending`:
+  // - covers both `pending` (hold window) and `committing` (commit in flight)
+  //   so the row doesn't briefly flash back between those two states;
+  // - matches against the op's full key-set so cascade descendants
+  //   (`card:<id>` keys on a deck-delete op) hide everywhere too. This is the
+  //   canonical hide predicate — callers must never reach into `op.state` or
+  //   `op.key` directly.
+  return ops.some(
+    (o) => (o.state === "pending" || o.state === "committing") && o.keys.some((k) => k === key),
+  );
 }
 
 /**

@@ -3,6 +3,8 @@ import { listAllDueCards } from "@/db/review-states";
 import type { Card } from "@/domain/card";
 import { dueCardsForTagAnd, listTagsWithDueCounts } from "@/domain/tags";
 import { cn } from "@/lib/cn";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import { usePendingDeletes } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -29,6 +31,12 @@ export function TagPickerPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  // Subscribe so chip counts re-aggregate when a pending-delete is enqueued
+  // or undone — `store.isPending("card:<id>")` is checked below and would
+  // otherwise stay stale until the next mount. The brief's invariant: every
+  // read-path filters through `store.isPending`.
+  usePendingDeletes();
+  const store = getPendingDeletes();
 
   useEffect(() => {
     let cancelled = false;
@@ -45,27 +53,39 @@ export function TagPickerPage() {
     };
   }, []);
 
+  // Filter out cards whose `card:<id>` is currently pending-deleted —
+  // directly (the user clicked Delete on the card) or via cascade (the
+  // user deleted the parent deck and the coordinator carries `card:<id>`
+  // cascade-keys on the deck-delete op). All subsequent aggregation
+  // (baseline counts, AND-filter, "Session starten" CTA) reads `visibleDue`
+  // so a pending-deleted card cannot leak into a tag session that the user
+  // launches during the 10s undo window.
+  const visibleDue = useMemo(() => {
+    if (allDue === null) return null;
+    return allDue.filter((c) => !store.isPending(`card:${c.id}`));
+  }, [allDue, store]);
+
   // Universe of tag-baseline-counts: how many due cards carry each tag,
   // independent of the current selection. Drives the chip ordering and is
   // also the source-of-truth for "does this tag exist at all?".
   const baseline = useMemo(() => {
-    if (allDue === null) return [];
-    return listTagsWithDueCounts(allDue);
-  }, [allDue]);
+    if (visibleDue === null) return [];
+    return listTagsWithDueCounts(visibleDue);
+  }, [visibleDue]);
 
   // AND-filtered counts: for each baseline tag, how many cards would the
   // session contain if the user toggled that tag *into* the selection.
   // Tags already in the selection get their current intersection-count
   // (equivalently: AND of the same set with itself).
   const liveCounts = useMemo(() => {
-    if (allDue === null) return new Map<string, number>();
+    if (visibleDue === null) return new Map<string, number>();
     const map = new Map<string, number>();
     for (const { tag } of baseline) {
       const probe = selected.has(tag) ? Array.from(selected) : [...Array.from(selected), tag];
-      map.set(tag, dueCardsForTagAnd(allDue, probe).length);
+      map.set(tag, dueCardsForTagAnd(visibleDue, probe).length);
     }
     return map;
-  }, [allDue, baseline, selected]);
+  }, [visibleDue, baseline, selected]);
 
   const filteredChips = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -74,10 +94,10 @@ export function TagPickerPage() {
   }, [baseline, search]);
 
   const selectedCount = useMemo(() => {
-    if (allDue === null) return 0;
+    if (visibleDue === null) return 0;
     if (selected.size === 0) return 0;
-    return dueCardsForTagAnd(allDue, Array.from(selected)).length;
-  }, [allDue, selected]);
+    return dueCardsForTagAnd(visibleDue, Array.from(selected)).length;
+  }, [visibleDue, selected]);
 
   const toggle = (tag: string) => {
     setSelected((prev) => {
@@ -113,7 +133,7 @@ export function TagPickerPage() {
     );
   }
 
-  if (allDue === null) {
+  if (visibleDue === null) {
     return (
       <section className="space-y-2">
         <h2 className="text-lg font-medium">Nach Tag lernen</h2>

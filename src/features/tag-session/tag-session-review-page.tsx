@@ -1,6 +1,7 @@
 import { listAllDueCards } from "@/db/review-states";
 import { dueCardsForTagAnd } from "@/domain/tags";
 import { ReviewSessionRunner } from "@/features/review/review-session-runner";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
@@ -13,7 +14,14 @@ export function TagSessionReviewPage({ tags }: { tags: string[] }) {
   const loadDueCards = useCallback(async () => {
     if (tagSet.length === 0) return [];
     const due = await listAllDueCards(Date.now());
-    return dueCardsForTagAnd(due, tagSet);
+    // ADR-0014 invariant: a card with a pending-delete op (direct or via
+    // deck-cascade) must not be reachable as a "due card" during the 10s
+    // undo window — otherwise the session queue would surface a card that
+    // visually no longer exists in the app. Centralised filter via
+    // `store.isPending("card:<id>")`.
+    const store = getPendingDeletes();
+    const visible = due.filter((c) => !store.isPending(`card:${c.id}`));
+    return dueCardsForTagAnd(visible, tagSet);
   }, [tagSet]);
 
   if (tagSet.length === 0) {

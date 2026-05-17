@@ -24,7 +24,26 @@
 
 export type PendingOp = {
   readonly id: string;
-  /** Stable key the UI uses to ask `isPending(key)`. Example: `"card:abc"`. */
+  /**
+   * Stable keys the UI/loader filters check via `isPending(key)`.
+   *
+   * The first entry is the *primary* key (the directly-deleted entity,
+   * e.g. `"deck:abc"`); subsequent entries are cascade-descendant keys
+   * (`"card:<id>"` for every child card when a deck is deleted). This way
+   * every read-path can call `store.isPending("card:42")` and get a hit even
+   * though the user only clicked "Delete deck" — the cascade-key construction
+   * lives in the coordinator's `enqueue` API, not in each loader.
+   *
+   * Invariant (ADR-0014): no read-model anywhere in the app may surface a row
+   * whose pending-delete op is in `pending` or `committing` state — neither
+   * the directly-deleted entity nor any cascade descendant.
+   */
+  readonly keys: readonly string[];
+  /**
+   * Convenience alias for `keys[0]` — the primary key. Kept on the op so
+   * existing code paths (toast list rendering, tests) that index by a single
+   * key keep working without churn.
+   */
   readonly key: string;
   /** Label shown in the toast, e.g. "Card gelöscht". */
   readonly label: string;
@@ -48,7 +67,23 @@ export type PendingOp = {
 };
 
 export type EnqueueInput = {
+  /**
+   * Primary key for the deleted entity (e.g. `"card:abc"`, `"deck:xyz"`,
+   * `"deck-set:s1"`). Surfaced as `op.key` and as `op.keys[0]`.
+   */
   key: string;
+  /**
+   * Additional cascade-descendant keys that must also be considered pending
+   * for the duration of this op. When deleting a Deck, supply
+   * `card:<id>` for every child card; when deleting a Deck-Set leave this
+   * empty (decks survive — ADR-0014). When deleting a Card leave this empty.
+   *
+   * Callers MUST resolve the cascade BEFORE enqueueing — otherwise a read
+   * during the 10s window will leak a row. The cascade snapshot is read
+   * synchronously here so a sibling tab cannot race in between the enqueue
+   * and the eventual commit.
+   */
+  cascadeKeys?: readonly string[];
   label: string;
   commit: () => Promise<void>;
   restore: () => Promise<void>;
@@ -168,9 +203,21 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     enqueue(input) {
       const id = `pd-${++idCounter}-${now()}`;
       const t = now();
+      // Dedupe cascade keys against the primary key — callers shouldn't have
+      // to filter the primary out of the cascade list manually.
+      const cascade = input.cascadeKeys ?? [];
+      const seen = new Set<string>([input.key]);
+      const merged: string[] = [input.key];
+      for (const k of cascade) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          merged.push(k);
+        }
+      }
       const op: PendingOp = {
         id,
         key: input.key,
+        keys: merged,
         label: input.label,
         createdAt: t,
         commitsAt: t + holdMs,
@@ -232,7 +279,17 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
       // hits "Löschen" until the IDB transaction has either committed or
       // failed. Returning false during `committing` would briefly flash the
       // row back into the list — visually identical to the row resurrecting.
-      return ops.some((o) => o.key === key && (o.state === "pending" || o.state === "committing"));
+      //
+      // Matches against the full key-set so cascade descendants (e.g.
+      // `card:<id>` keys carried by a deck-delete op) hide everywhere too —
+      // see ADR-0014 / the cascade-keys invariant in the brief.
+      for (const o of ops) {
+        if (o.state !== "pending" && o.state !== "committing") continue;
+        for (const k of o.keys) {
+          if (k === key) return true;
+        }
+      }
+      return false;
     },
 
     subscribe(listener) {
