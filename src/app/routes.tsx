@@ -2,6 +2,8 @@ import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
 import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
+import { CuratedDetailPage } from "@/features/curated/curated-detail-page";
+import { CuratedLibraryPage } from "@/features/curated/curated-library-page";
 import { DeckSetCreatePage } from "@/features/deck-set/deck-set-create-page";
 import { DeckSetDetailPage } from "@/features/deck-set/deck-set-detail-page";
 import { DeckSetSettingsPage } from "@/features/deck-set/deck-set-settings-page";
@@ -194,6 +196,24 @@ const sharedDeckSetImportRoute = createRoute({
   component: SharedDeckSetImportPage,
 });
 
+const curatedLibraryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/curated",
+  component: CuratedLibraryPage,
+});
+
+const curatedDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/curated/$slug",
+  component: function CuratedDetailRouteComponent() {
+    const { slug } = curatedDetailRoute.useParams();
+    // Key by slug so navigating between two curated entries remounts the
+    // page and resets all per-entry state (load progress, error banners,
+    // success panels) — matches the pattern used for `/deck/$deckId`.
+    return <CuratedDetailPage key={slug} slug={slug} />;
+  },
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -231,5 +251,7 @@ export const routeTree = rootRoute.addChildren([
   backupImportRoute,
   sharedDeckImportRoute,
   sharedDeckSetImportRoute,
+  curatedLibraryRoute,
+  curatedDetailRoute,
   aboutRoute,
 ]);

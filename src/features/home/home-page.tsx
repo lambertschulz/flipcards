@@ -93,9 +93,9 @@ function useNow(intervalMs = 60_000): number {
  * the brief lists alphabetical as the named alternative and Out-of-scope
  * already excludes the sort-toggle. See `home-read-model.ts` for the same note.
  *
- * Curated-Import / Backup-Import: the receiving routes don't exist yet —
- * the buttons announce that via an inline aria-described hint and stay
- * disabled. Wiring is the respective import-feature ticket's responsibility.
+ * Curated-Import links to the `/curated` library (issue #24); Backup-Import
+ * to `/backup/import`. Both routes exist as of those tickets — see
+ * `src/features/curated/` and `src/features/backup/`.
  */
 export function HomePage() {
   // All entity-table reads go through the visibility-filtered hooks
@@ -296,12 +296,10 @@ function EmptyState() {
           title="Curated Deck wählen"
           description="Importiere ein vorbereitetes Deck aus der Bibliothek."
           action={
-            <Button variant="outline" disabled aria-describedby="curated-coming">
-              Curated importieren
-            </Button>
+            <Link to="/curated">
+              <Button variant="outline">Curated wählen</Button>
+            </Link>
           }
-          hintId="curated-coming"
-          hint="Bald verfügbar."
         />
         <EmptyStateCard
           title="Shared Deck-Set importieren"
@@ -364,9 +362,9 @@ function HomeFooter() {
         <Link to="/shared-deck/import">
           <Button variant="outline">Shared Deck importieren</Button>
         </Link>
-        <Button variant="outline" disabled aria-describedby="footer-curated-coming">
-          Curated importieren
-        </Button>
+        <Link to="/curated">
+          <Button variant="outline">Curated importieren</Button>
+        </Link>
         <Button
           variant="outline"
           disabled={busy}
@@ -388,9 +386,6 @@ function HomeFooter() {
           <Button variant="outline">Backup importieren</Button>
         </Link>
       </div>
-      <p id="footer-curated-coming" className="text-xs text-slate-500">
-        Curated-Import folgt in einem eigenen Ticket.
-      </p>
     </footer>
   );
 }

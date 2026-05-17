@@ -127,6 +127,27 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
           await db.cards.bulkPut(toAdd);
         }
 
+        // ADR-0010 — Curated-Deck provenance invariant. For every deck row
+        // written or updated as part of a Curated import (payload carries
+        // `curatedSourceId`/`contentVersion`), `decks.curatedSourceId` and
+        // `decks.contentVersion` MUST equal the payload's values after the
+        // transaction commits — regardless of which branch we took. Curated
+        // re-import is the canonical source of truth for those fields, so
+        // incoming wins over existing here (a bumped `contentVersion` MUST
+        // land; otherwise the user "updated" the deck but the row still
+        // claims the old version). Deck name/description still stay as they
+        // are locally — only the provenance pair is stamped.
+        const provenanceUpdate: Partial<Pick<DeckRow, "curatedSourceId" | "contentVersion">> = {};
+        if (file.deck.curatedSourceId !== undefined) {
+          provenanceUpdate.curatedSourceId = file.deck.curatedSourceId;
+        }
+        if (file.deck.contentVersion !== undefined) {
+          provenanceUpdate.contentVersion = file.deck.contentVersion;
+        }
+        if (Object.keys(provenanceUpdate).length > 0) {
+          await db.decks.update(existingDeck.id, provenanceUpdate);
+        }
+
         return {
           mode: "merged",
           deckId: existingDeck.id,
@@ -144,6 +165,16 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
 
       const deckRow: DeckRow = { id: file.deck.id, name: finalName };
       if (file.deck.description !== undefined) deckRow.description = file.deck.description;
+      // ADR-0010 — Curated-Deck provenance. The fields are optional on the
+      // SharedDeck schema, so peer-shared imports keep them undefined and the
+      // resulting deck row is indistinguishable from a hand-built one. Only
+      // payloads that carry the curator-assigned id + version persist them.
+      if (file.deck.curatedSourceId !== undefined) {
+        deckRow.curatedSourceId = file.deck.curatedSourceId;
+      }
+      if (file.deck.contentVersion !== undefined) {
+        deckRow.contentVersion = file.deck.contentVersion;
+      }
       await db.decks.add(deckRow);
 
       // New-deck branch: still filter against the global card-ID set so we

@@ -111,5 +111,7 @@ function fromDeckRow(row: DeckRow): Deck {
   const deck: Deck = { id: row.id, name: row.name };
   if (row.description !== undefined) deck.description = row.description;
   if (row.deckSetId !== undefined) deck.deckSetId = row.deckSetId;
+  if (row.curatedSourceId !== undefined) deck.curatedSourceId = row.curatedSourceId;
+  if (row.contentVersion !== undefined) deck.contentVersion = row.contentVersion;
   return deck;
 }
