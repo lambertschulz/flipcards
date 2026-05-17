@@ -1,8 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { deleteCard } from "@/db/cards";
 import { db } from "@/db/database";
+import { filterCards } from "@/domain/card";
+import { isDue } from "@/domain/sm2";
+import {
+  DeckCardFilterBar,
+  type DeckCardFilterState,
+  EMPTY_FILTER_STATE,
+  isFilterActive,
+} from "@/features/deck/deck-card-filter-bar";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useMemo, useState } from "react";
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
   const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
@@ -16,6 +25,50 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
     [deckId],
     undefined,
   );
+  // Review-states for the visible cards, used to derive the Due-id set for the
+  // status filter. We load these here (not in the domain) to keep
+  // `filterCards` pure — the domain accepts a pre-resolved `dueCardIds` set.
+  // `useLiveQuery` re-runs when review-states change (e.g. after rating in a
+  // session), so the "Nur Due" count stays accurate.
+  const reviewStates = useLiveQuery(
+    async () => {
+      if (!cards || cards.length === 0) return [];
+      return db.reviewStates
+        .where("cardId")
+        .anyOf(cards.map((c) => c.id))
+        .toArray();
+    },
+    [cards],
+    undefined,
+  );
+
+  // Filter state is page-local and intentionally not persisted across
+  // navigation (ticket requirement: avoid "why are only 3 cards here?"
+  // confusion when re-entering the page).
+  const [filter, setFilter] = useState<DeckCardFilterState>(EMPTY_FILTER_STATE);
+
+  const dueCardIds = useMemo<Set<string> | undefined>(() => {
+    if (!cards || reviewStates === undefined) return undefined;
+    const now = Date.now();
+    const stateById = new Map(reviewStates.map((s) => [s.cardId, s]));
+    const ids = new Set<string>();
+    for (const card of cards) {
+      const state = stateById.get(card.id);
+      // Cards without a Review-State are due by definition (first-seen).
+      if (!state || isDue(state, now)) ids.add(card.id);
+    }
+    return ids;
+  }, [cards, reviewStates]);
+
+  const visibleCards = useMemo(() => {
+    if (!cards) return undefined;
+    return filterCards(cards, {
+      query: filter.query,
+      tags: filter.tags,
+      status: filter.status,
+      dueCardIds,
+    });
+  }, [cards, filter, dueCardIds]);
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
@@ -30,6 +83,9 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
       </section>
     );
   }
+
+  const totalCards = cards?.length ?? 0;
+  const filterIsActive = isFilterActive(filter);
 
   return (
     <section className="space-y-4">
@@ -73,33 +129,60 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
           </Link>
         </div>
       ) : (
-        <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-          {cards.map((card) => (
-            <li
-              key={card.id}
-              className="flex items-center justify-between gap-2 px-3 py-2 min-h-[44px]"
-            >
-              <Link
-                to="/deck/$deckId/card/$cardId/edit"
-                params={{ deckId: deck.id, cardId: card.id }}
-                className="flex-1 truncate hover:underline"
-              >
-                {firstLine(card.front) || "(leere Vorderseite)"}
-              </Link>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  if (confirm("Card endgültig löschen?")) await deleteCard(card.id);
-                }}
-                aria-label="Card löschen"
-              >
-                Löschen
+        <>
+          <DeckCardFilterBar
+            cards={cards}
+            dueCardIds={dueCardIds}
+            state={filter}
+            onChange={setFilter}
+          />
+
+          {visibleCards && visibleCards.length === 0 ? (
+            <output className="block rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
+              <p className="mb-3 text-slate-600 dark:text-slate-400">
+                Keine Cards passen zu den aktuellen Filtern.
+              </p>
+              <Button type="button" variant="outline" onClick={() => setFilter(EMPTY_FILTER_STATE)}>
+                Filter zurücksetzen
               </Button>
-            </li>
-          ))}
-        </ul>
+            </output>
+          ) : (
+            <>
+              {filterIsActive && visibleCards ? (
+                <p className="text-sm text-slate-500">
+                  {visibleCards.length} von {totalCards} Cards
+                </p>
+              ) : null}
+              <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+                {(visibleCards ?? []).map((card) => (
+                  <li
+                    key={card.id}
+                    className="flex items-center justify-between gap-2 px-3 py-2 min-h-[44px]"
+                  >
+                    <Link
+                      to="/deck/$deckId/card/$cardId/edit"
+                      params={{ deckId: deck.id, cardId: card.id }}
+                      className="flex-1 truncate hover:underline"
+                    >
+                      {firstLine(card.front) || "(leere Vorderseite)"}
+                    </Link>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        if (confirm("Card endgültig löschen?")) await deleteCard(card.id);
+                      }}
+                      aria-label="Card löschen"
+                    >
+                      Löschen
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
       )}
     </section>
   );
