@@ -32,8 +32,18 @@ export type PendingOp = {
   readonly createdAt: number;
   /** Timestamp (ms) at which the op will auto-commit. */
   readonly commitsAt: number;
-  /** Whether the op has been committed or undone (terminal). */
-  readonly state: "pending" | "committed" | "undone" | "failed";
+  /**
+   * Lifecycle state of the op.
+   *
+   * - `pending`   — still in the 10s hold window; undo is allowed.
+   * - `committing` — `commit()` has been called and we're awaiting it; undo
+   *                  is NOT allowed (the IDB transaction is in flight and
+   *                  cannot be rolled back from the coordinator).
+   * - `committed` — `commit()` resolved; op is dropped from the visible list.
+   * - `undone`    — user hit Rückgängig; op is dropped after restore runs.
+   * - `failed`    — `commit()` rejected; op stays visible so onError can surface it.
+   */
+  readonly state: "pending" | "committing" | "committed" | "undone" | "failed";
   readonly error?: string;
 };
 
@@ -131,6 +141,14 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
       publish();
       return;
     }
+    // Transition to `committing` BEFORE awaiting commit() so the UI hides
+    // the undo affordance during the in-flight IDB transaction. If we left
+    // the op as `pending` here, a fast user could click Rückgängig after
+    // commit started but before it settled — the undo path would drop the
+    // op and run a no-op restore (snapshot doesn't exist yet) while the
+    // in-flight commit still finishes and deletes the data.
+    transition(id, { state: "committing" });
+    publish();
     try {
       await commit();
       transition(id, { state: "committed" });
@@ -209,7 +227,12 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     },
 
     isPending(key) {
-      return ops.some((o) => o.key === key && o.state === "pending");
+      // `pending` (hold window) and `committing` (commit in flight) both
+      // count: the row must stay hidden in the UI from the moment the user
+      // hits "Löschen" until the IDB transaction has either committed or
+      // failed. Returning false during `committing` would briefly flash the
+      // row back into the list — visually identical to the row resurrecting.
+      return ops.some((o) => o.key === key && (o.state === "pending" || o.state === "committing"));
     },
 
     subscribe(listener) {

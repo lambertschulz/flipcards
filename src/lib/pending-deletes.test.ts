@@ -141,6 +141,67 @@ describe("createPendingDeletesStore — basic enqueue/commit", () => {
   });
 });
 
+describe("createPendingDeletesStore — undo while commit in flight", () => {
+  it("rejects undo during an in-flight commit and lets the commit finish", async () => {
+    const scheduler = makeManualScheduler();
+
+    // A deferred promise lets us hold commit() open until we manually resolve it.
+    let resolveCommit!: () => void;
+    const commitGate = new Promise<void>((res) => {
+      resolveCommit = res;
+    });
+    const commit = vi.fn(async () => {
+      await commitGate;
+    });
+    const restore = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const id = store.enqueue({ key: "card:1", label: "x", commit, restore });
+
+    // Advance the timer so commitOp starts, but commit() hasn't resolved yet.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    // While commit is in flight the op must be visible as `committing`, NOT
+    // `pending` — that's what lets the UI hide the Rückgängig affordance.
+    const inFlight = store.list().find((o) => o.id === id);
+    expect(inFlight?.state).toBe("committing");
+
+    // Attempting undo during the in-flight window must be a no-op:
+    // restore must NOT run.
+    await store.undo(id);
+    expect(restore).not.toHaveBeenCalled();
+
+    // The commit was already in-flight — let it finish; data is still deleted.
+    resolveCommit();
+    await vi.waitFor(() => expect(store.list()).toHaveLength(0));
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps `isPending(key)` true while the commit is in flight", async () => {
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    const commit = vi.fn(
+      () =>
+        new Promise<void>((res) => {
+          resolveCommit = res;
+        }),
+    );
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    // Row should still be hidden from the UI while the IDB transaction runs.
+    expect(store.isPending("card:1")).toBe(true);
+
+    resolveCommit();
+    await vi.waitFor(() => expect(store.isPending("card:1")).toBe(false));
+  });
+});
+
 describe("createPendingDeletesStore — error paths", () => {
   it("transitions to `failed` and notifies onError when commit rejects", async () => {
     const scheduler = makeManualScheduler();

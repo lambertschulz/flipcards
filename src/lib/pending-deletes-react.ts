@@ -25,7 +25,10 @@ export function useIsPendingDelete(
   store: PendingDeletesStore = getPendingDeletes(),
 ): boolean {
   const ops = usePendingDeletes(store);
-  return ops.some((o) => o.key === key && o.state === "pending");
+  // Match `store.isPending`: hide the row both while pending (hold window)
+  // and while the commit is in flight, so the row doesn't briefly flash
+  // back into the list between those two states.
+  return ops.some((o) => o.key === key && (o.state === "pending" || o.state === "committing"));
 }
 
 /**

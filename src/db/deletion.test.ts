@@ -103,6 +103,30 @@ describe("deleteDeckWithCascade", () => {
     expect(await db.reviewStates.get(cOther.id)).toBeDefined();
   });
 
+  it("leaves no orphan cards after the cascade (read happens inside the rw transaction)", async () => {
+    // Regression: cascade target used to be queried *before* opening the rw
+    // transaction. That left a gap in which a concurrent writer could insert
+    // a card targeting the same deck; the deck would then be deleted while
+    // the new card remained as an orphan with a stale deckId.
+    //
+    // We can't easily simulate a second tab inside vitest, so this test
+    // checks the post-condition that the new (in-txn) variant guarantees:
+    // after deleteDeckWithCascade, NO card row references the deleted deck,
+    // even if cards exist that the caller didn't pass in.
+    const deck = await createDeckInDb({ name: "Latein" });
+    // Add a fistful of cards directly via db, bypassing planner-side hints.
+    for (let i = 0; i < 5; i++) {
+      await createCardInDb({ deckId: deck.id, front: `f${i}`, back: `b${i}` });
+    }
+
+    await deleteDeckWithCascade(deck.id);
+
+    // The deck is gone.
+    expect(await db.decks.get(deck.id)).toBeUndefined();
+    // And — the load-bearing assertion — no orphans linger.
+    expect(await db.cards.where("deckId").equals(deck.id).count()).toBe(0);
+  });
+
   it("handles an empty deck (cascade target is empty)", async () => {
     const deck = await createDeckInDb({ name: "Empty" });
     const snap = await deleteDeckWithCascade(deck.id);
@@ -160,6 +184,22 @@ describe("deleteDeckSetWithCascade", () => {
 
     expect(await db.decks.get(d1.id)).toBeDefined();
     expect(await db.cards.get(c1.id)).toBeDefined();
+  });
+
+  it("leaves no decks still attached to the set after the cascade (read inside rw txn)", async () => {
+    // Regression mirror of the deleteDeckWithCascade variant: member decks
+    // were previously queried *before* opening the rw transaction. We now
+    // query them inside the same transaction so no deck can be left with a
+    // stale `deckSetId` pointing at a deleted set.
+    await db.deckSets.put({ id: "s1", name: "Medizin" });
+    for (let i = 0; i < 4; i++) {
+      await createDeckInDb({ name: `d${i}`, deckSetId: "s1" });
+    }
+
+    await deleteDeckSetWithCascade("s1");
+
+    expect(await db.deckSets.get("s1")).toBeUndefined();
+    expect(await db.decks.where("deckSetId").equals("s1").count()).toBe(0);
   });
 
   it("handles an empty set (no detached decks)", async () => {

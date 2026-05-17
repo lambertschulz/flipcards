@@ -60,28 +60,42 @@ export async function deleteCardWithCascade(cardId: string): Promise<DeletedCard
 /**
  * Plan + delete a Deck, its Cards, and their Review-States atomically.
  * Returns a snapshot suitable for undo.
+ *
+ * The cascade target (the list of cards belonging to the deck) is queried
+ * *inside* the rw transaction. If we read it before opening the transaction
+ * another tab or a background task could insert a card to the same deck in
+ * the gap between the read and the delete — the deck row would then be
+ * deleted while the new card remained orphaned with a stale `deckId`.
  */
 export async function deleteDeckWithCascade(deckId: string): Promise<DeletedDeckSnapshot> {
-  const cards = await db.cards.where("deckId").equals(deckId).toArray();
-  const plan = planDeleteDeck(
-    deckId,
-    cards.map((c) => ({ id: c.id, deckId: c.deckId })),
-  );
-  return executeDeckDelete(plan);
+  return db.transaction("rw", db.decks, db.cards, db.reviewStates, async () => {
+    const cards = await db.cards.where("deckId").equals(deckId).toArray();
+    const plan = planDeleteDeck(
+      deckId,
+      cards.map((c) => ({ id: c.id, deckId: c.deckId })),
+    );
+    return executeDeckDeleteInTxn(plan);
+  });
 }
 
 /**
  * Plan + delete a Deck-Set; member decks are detached (deckSetId cleared) but
  * stay alive. Returns a snapshot recording the *previous* deckSetId of each
  * detached deck so undo can restore set-membership precisely.
+ *
+ * The member-deck query runs *inside* the rw transaction so an inserting
+ * sibling tab cannot leave us with a deck that still references a deleted
+ * Deck-Set.
  */
 export async function deleteDeckSetWithCascade(deckSetId: string): Promise<DeletedDeckSetSnapshot> {
-  const decks = await db.decks.where("deckSetId").equals(deckSetId).toArray();
-  const plan = planDeleteDeckSet(
-    deckSetId,
-    decks.map((d) => ({ id: d.id, deckSetId: d.deckSetId })),
-  );
-  return executeDeckSetDelete(plan);
+  return db.transaction("rw", db.deckSets, db.decks, async () => {
+    const decks = await db.decks.where("deckSetId").equals(deckSetId).toArray();
+    const plan = planDeleteDeckSet(
+      deckSetId,
+      decks.map((d) => ({ id: d.id, deckSetId: d.deckSetId })),
+    );
+    return executeDeckSetDeleteInTxn(plan);
+  });
 }
 
 // --- Internals -------------------------------------------------------------
@@ -117,70 +131,66 @@ async function executeCardDelete(plan: DeleteCardPlan): Promise<DeletedCardSnaps
   });
 }
 
-async function executeDeckDelete(plan: DeleteDeckPlan): Promise<DeletedDeckSnapshot> {
-  return db.transaction("rw", db.decks, db.cards, db.reviewStates, async () => {
-    const deckRow = await db.decks.get(plan.deckId);
-    const cardRows = plan.cardIds.length > 0 ? await db.cards.bulkGet([...plan.cardIds]) : [];
-    const stateRows =
-      plan.reviewStateCardIds.length > 0
-        ? await db.reviewStates.bulkGet([...plan.reviewStateCardIds])
-        : [];
+async function executeDeckDeleteInTxn(plan: DeleteDeckPlan): Promise<DeletedDeckSnapshot> {
+  const deckRow = await db.decks.get(plan.deckId);
+  const cardRows = plan.cardIds.length > 0 ? await db.cards.bulkGet([...plan.cardIds]) : [];
+  const stateRows =
+    plan.reviewStateCardIds.length > 0
+      ? await db.reviewStates.bulkGet([...plan.reviewStateCardIds])
+      : [];
 
-    if (deckRow) await db.decks.delete(plan.deckId);
-    if (plan.cardIds.length > 0) await db.cards.bulkDelete([...plan.cardIds]);
-    if (plan.reviewStateCardIds.length > 0)
-      await db.reviewStates.bulkDelete([...plan.reviewStateCardIds]);
+  if (deckRow) await db.decks.delete(plan.deckId);
+  if (plan.cardIds.length > 0) await db.cards.bulkDelete([...plan.cardIds]);
+  if (plan.reviewStateCardIds.length > 0)
+    await db.reviewStates.bulkDelete([...plan.reviewStateCardIds]);
 
-    return {
-      deck: deckRow
-        ? {
-            id: deckRow.id,
-            name: deckRow.name,
-            description: deckRow.description,
-            deckSetId: deckRow.deckSetId,
-          }
-        : { id: plan.deckId, name: "" },
-      cards: cardRows
-        .filter((c): c is NonNullable<typeof c> => !!c)
-        .map((c) => ({
-          id: c.id,
-          deckId: c.deckId,
-          front: c.front,
-          back: c.back,
-          tags: [...(c.tags ?? [])],
-        })),
-      reviewStates: stateRows
-        .filter((s): s is NonNullable<typeof s> => !!s)
-        .map((s) => ({
-          cardId: s.cardId,
-          repetitions: s.repetitions,
-          easeFactor: s.easeFactor,
-          intervalDays: s.intervalDays,
-          nextDue: s.nextDue,
-        })),
-    };
-  });
+  return {
+    deck: deckRow
+      ? {
+          id: deckRow.id,
+          name: deckRow.name,
+          description: deckRow.description,
+          deckSetId: deckRow.deckSetId,
+        }
+      : { id: plan.deckId, name: "" },
+    cards: cardRows
+      .filter((c): c is NonNullable<typeof c> => !!c)
+      .map((c) => ({
+        id: c.id,
+        deckId: c.deckId,
+        front: c.front,
+        back: c.back,
+        tags: [...(c.tags ?? [])],
+      })),
+    reviewStates: stateRows
+      .filter((s): s is NonNullable<typeof s> => !!s)
+      .map((s) => ({
+        cardId: s.cardId,
+        repetitions: s.repetitions,
+        easeFactor: s.easeFactor,
+        intervalDays: s.intervalDays,
+        nextDue: s.nextDue,
+      })),
+  };
 }
 
-async function executeDeckSetDelete(plan: DeleteDeckSetPlan): Promise<DeletedDeckSetSnapshot> {
-  return db.transaction("rw", db.deckSets, db.decks, async () => {
-    const setRow = await db.deckSets.get(plan.deckSetId);
-    const detached: DeletedDeckSetSnapshot["detachedDecks"] = [];
+async function executeDeckSetDeleteInTxn(plan: DeleteDeckSetPlan): Promise<DeletedDeckSetSnapshot> {
+  const setRow = await db.deckSets.get(plan.deckSetId);
+  const detached: DeletedDeckSetSnapshot["detachedDecks"] = [];
 
-    for (const deckId of plan.detachedDeckIds) {
-      const deckRow = await db.decks.get(deckId);
-      if (!deckRow || deckRow.deckSetId !== plan.deckSetId) continue;
-      detached.push({ id: deckId, previousDeckSetId: plan.deckSetId });
-      await db.decks.put({ ...deckRow, deckSetId: undefined });
-    }
+  for (const deckId of plan.detachedDeckIds) {
+    const deckRow = await db.decks.get(deckId);
+    if (!deckRow || deckRow.deckSetId !== plan.deckSetId) continue;
+    detached.push({ id: deckId, previousDeckSetId: plan.deckSetId });
+    await db.decks.put({ ...deckRow, deckSetId: undefined });
+  }
 
-    if (setRow) await db.deckSets.delete(plan.deckSetId);
+  if (setRow) await db.deckSets.delete(plan.deckSetId);
 
-    return {
-      deckSet: setRow ? { id: setRow.id, name: setRow.name } : { id: plan.deckSetId, name: "" },
-      detachedDecks: detached,
-    };
-  });
+  return {
+    deckSet: setRow ? { id: setRow.id, name: setRow.name } : { id: plan.deckSetId, name: "" },
+    detachedDecks: detached,
+  };
 }
 
 // --- Undo restorers --------------------------------------------------------
