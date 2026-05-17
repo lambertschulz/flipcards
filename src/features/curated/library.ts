@@ -33,18 +33,28 @@ export type LibraryError =
 export type LibraryResult<T> = { ok: true; value: T } | { ok: false; error: LibraryError };
 
 /**
- * Resolve a curated bundle path against the app's base URL. Tolerates both
- * test environments (where `import.meta.env.BASE_URL` is `/`) and the
- * `./`-relative prod build (ADR-0008). We strip a leading `./` so the
- * resulting URL is rooted, which is what `fetch` expects for static assets.
+ * Resolve a curated bundle path against the app's base URL.
+ *
+ * Vite's `base: "./"` (ADR-0008, required for the GitHub-Pages subpath
+ * `/flipcards/`) means `import.meta.env.BASE_URL` is the relative string
+ * `"./"` in production builds. We deliberately keep that relative — `fetch`
+ * resolves relative URLs against `document.baseURI`, so on the live site at
+ * `https://<user>.github.io/flipcards/` the request goes to
+ * `/flipcards/curated/<file>` as intended.
+ *
+ * Critically, we do NOT normalise `./` to `/`: that would produce an
+ * absolute-from-root URL and silently hit the domain root in production,
+ * breaking the Curated library under the subpath. In test / dev environments
+ * `BASE_URL` is already `/` so the same code path works there.
+ *
+ * Returns a relative URL string (no leading `/`) for the prod build, or an
+ * absolute path for dev/test where `BASE_URL` is `/`.
  */
-function curatedUrl(filename: string): string {
+export function curatedUrl(filename: string): string {
   const base = import.meta.env.BASE_URL ?? "/";
-  // `./` → `/` for fetch resolution in tests / SSR-ish contexts.
-  const normalisedBase = base.startsWith("./") ? base.slice(1) : base;
-  // Ensure exactly one slash between base and filename.
-  const sep = normalisedBase.endsWith("/") ? "" : "/";
-  return `${normalisedBase}${sep}curated/${filename}`;
+  // Ensure exactly one slash between base and the `curated/` segment.
+  const sep = base.endsWith("/") ? "" : "/";
+  return `${base}${sep}curated/${filename}`;
 }
 
 /**

@@ -9,11 +9,54 @@ import {
   stringifySharedDeckSet,
 } from "@/domain/shared-deck";
 
-import { loadCuratedManifest, loadCuratedPayload } from "./library";
+import { curatedUrl, loadCuratedManifest, loadCuratedPayload } from "./library";
 
 function makeResponse(body: string, init?: ResponseInit): Response {
   return new Response(body, { status: 200, ...init });
 }
+
+describe("curatedUrl", () => {
+  // Regression: an earlier version normalised `./` → `/`, which under the
+  // GitHub-Pages subpath `/flipcards/` (ADR-0008) made fetch hit the domain
+  // root instead of the app subpath. Vitest exposes `BASE_URL` as `/`, so we
+  // assert the prod-build case by stubbing `import.meta.env.BASE_URL`.
+  it("returns a relative URL (no leading `/`) when BASE_URL is `./` (prod build)", () => {
+    const original = import.meta.env.BASE_URL;
+    vi.stubEnv("BASE_URL", "./");
+    try {
+      const url = curatedUrl("index.json");
+      // Must NOT be absolute-from-root, or it bypasses the subpath under GH Pages.
+      expect(url.startsWith("/")).toBe(false);
+      // Resolve against a subpath baseURI to prove it lands inside the app.
+      const resolved = new URL(url, "https://example.com/flipcards/").href;
+      expect(resolved).toBe("https://example.com/flipcards/curated/index.json");
+    } finally {
+      vi.stubEnv("BASE_URL", original);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("works under a deeper subpath base", () => {
+    vi.stubEnv("BASE_URL", "./");
+    try {
+      const url = curatedUrl("french.json");
+      const resolved = new URL(url, "https://example.com/some/deep/path/").href;
+      expect(resolved).toBe("https://example.com/some/deep/path/curated/french.json");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("returns a root-absolute URL when BASE_URL is `/` (dev / test)", () => {
+    // Default Vitest BASE_URL is `/`; double-check via stub for clarity.
+    vi.stubEnv("BASE_URL", "/");
+    try {
+      expect(curatedUrl("index.json")).toBe("/curated/index.json");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe("loadCuratedManifest", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
