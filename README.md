@@ -34,6 +34,18 @@ Bootstrap-Skelett. Die Architektur (Vite + React + TS, Tailwind, shadcn/ui, Dexi
 
 `browserslist` in `package.json`: `["last 2 versions", "not dead", ">0.5%"]`.
 
+Getestet auf aktuellen Versionen von Chrome, Firefox, Safari (Desktop und iOS) und Edge. Edge wird wie Chrome behandelt. Ältere Browser können funktionieren, sind aber nicht Ziel.
+
+Vorausgesetzte Browser-APIs (alle im obigen Floor verfügbar):
+
+- **IndexedDB v2** (mit Promises via Dexie) — Persistenz.
+- **Service Worker** — PWA-Shell.
+- **`navigator.storage.estimate()`** — Speicher-Warnungen ([ADR-0013](./docs/adr/0013-image-policy.md)).
+- **`prefers-color-scheme`** und **`prefers-reduced-motion`** ([ADR-0015](./docs/adr/0015-accessibility-target.md)).
+- **`visibilitychange`/`pagehide`** — commit-on-hide ([ADR-0014](./docs/adr/0014-deletion-semantics.md)).
+
+Keine Polyfills: moderner Target → kleineres Bundle. Wenn ein konkreter Polyfill nötig wird, ist das ein separater Trigger.
+
 ## Performance-Budget
 
 Initial-Bundle ≤ 250 KB gzipped (siehe [ADR-0017](./docs/adr/0017-performance-budget.md)). Wird in CI als non-blocking Report gemessen.
