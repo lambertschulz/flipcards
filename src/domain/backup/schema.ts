@@ -1,14 +1,17 @@
 // Zod schemas for the Backup JSON format (ADR-0016 axis #4).
 //
-// A Backup is the complete local snapshot — all Decks, Deck-Sets, Cards, and
-// Review-States — and is **distinct** from a Shared Deck. CONTEXT.md spells
-// that distinction out; we double down on it by versioning the Backup format
-// on its own `formatVersion` axis, independent from the Shared-Deck counter.
-// That way an additive change to one (e.g. a new Settings block in Backup)
-// doesn't fake-bump the other.
+// A Backup is the complete local snapshot — all Decks, Deck-Sets, Cards,
+// Review-States, plus the per-rating review log (ADR-0012). It is **distinct**
+// from a Shared Deck (CONTEXT.md): a Shared Deck is one deck, no review data,
+// for sharing; a Backup is everything, private to the local user. The two
+// formats version on their own `formatVersion` axes — additive changes to one
+// don't fake-bump the other.
 //
 // The Zod schemas here are the source of truth — the TS types are inferred.
-// Hand-written types alongside would drift; we infer instead.
+// We reuse `SharedCardSchema` for the per-card body because the on-disk Card
+// payload (front/back/tags) is byte-identical across the two formats; only
+// the wrapper differs (a Backup-deck carries `deckSetId`, a Shared-Deck
+// doesn't).
 
 import { z } from "zod";
 
@@ -18,23 +21,20 @@ export const CURRENT_BACKUP_FORMAT_VERSION = 1;
 export const BACKUP_FORMAT = "flipcards.backup";
 
 const ID_REGEX = /^[A-Za-z0-9_-]{8,}$/;
-const MAX_NAME_LENGTH = 200;
 
 const idSchema = z.string().regex(ID_REGEX, "id must match /^[A-Za-z0-9_-]{8,}$/");
 
-const nameSchema = z.string().refine(
-  (raw) => {
-    const trimmed = raw.trim();
-    return trimmed.length >= 1 && trimmed.length <= MAX_NAME_LENGTH;
-  },
-  { message: `name must be 1..${MAX_NAME_LENGTH} characters after trim` },
-);
+// Non-empty after trim. We don't normalize — the raw value round-trips so
+// Export → Reset → Import reproduces the exact prior state (ticket AC).
+//
+// No upper-bound length cap: the domain/UI elsewhere doesn't enforce one, so a
+// locally valid deck name (however long) must survive a round-trip. Backup is
+// a faithful snapshot, not an enforcement gate. If the domain ever adopts a
+// cap, it belongs in the domain validators — not here.
+const nameSchema = z.string().refine((raw) => raw.trim().length >= 1, {
+  message: "name must be non-empty after trim",
+});
 
-// A backed-up Deck carries the same shape as the in-memory Deck plus its
-// optional Deck-Set membership. We reuse `SharedCardSchema` for the Card body
-// because the on-disk Card layout is identical across Shared-Deck and Backup
-// (front/back/tags) — the only difference is that Backup also carries the
-// owning `deckId`, which lives on the wrapper here.
 const BackupDeckSchema = z.object({
   id: idSchema,
   name: nameSchema,
@@ -55,28 +55,27 @@ const BackupDeckSetSchema = z.object({
 
 // Review-State row. Mirrors `ReviewStateRow` in the Dexie schema — but lives
 // here as a Zod schema so on-disk Backup files are self-validating without
-// needing the DB layer to round-trip them. `nextDue` is an epoch-ms number;
-// `easeFactor` is a positive float (SM-2 default 2.5, floor 1.3 per ADR-0002).
+// going through the DB layer. `nextDue` is an epoch-ms number. `easeFactor`
+// must be ≥ MIN_EASE_FACTOR (1.3) per ADR-0002; we enforce that floor here
+// to keep the file honest even if a hand-edited file lowers it.
 const BackupReviewStateSchema = z.object({
   cardId: idSchema,
   repetitions: z.number().int().nonnegative(),
-  easeFactor: z.number().positive(),
+  easeFactor: z.number().min(1.3, "easeFactor must be ≥ 1.3 (ADR-0002 floor)"),
   intervalDays: z.number().nonnegative(),
   nextDue: z.number().int(),
 });
 
-// Review-Log row. ADR-0012 pins this table as the source of truth for stats
-// surfaces (heatmap, streak, per-card history). It belongs in Backup because
-// Backup is the full local snapshot (ADR-0001) — losing it on restore would
-// silently wipe the user's learning history. Shape mirrors `ReviewLogRow` in
-// the Dexie schema.
+// Review-Log row. ADR-0012 pins the log as the source of truth for stats
+// surfaces (heatmap, streak, per-card history); losing it on restore would
+// silently wipe the user's learning history. Shape mirrors `ReviewLogRow`.
 const BackupReviewLogSchema = z.object({
   id: idSchema,
   cardId: idSchema,
   timestamp: z.number().int(),
   rating: z.enum(["again", "hard", "good", "easy"]),
   intervalAfter: z.number().nonnegative(),
-  easeAfter: z.number().positive(),
+  easeAfter: z.number().min(1.3),
 });
 
 export const BackupFileV1Schema = z
@@ -84,9 +83,8 @@ export const BackupFileV1Schema = z
     format: z.literal(BACKUP_FORMAT),
     formatVersion: z.literal(CURRENT_BACKUP_FORMAT_VERSION),
     exportedAt: z.string(),
-    // App-SemVer at export time. Informational — drives no parse behaviour, but
-    // useful for diagnostics ("this backup is from app 0.3.1") and for future
-    // compat hints.
+    // App-SemVer at export time. Informational — drives no parse behaviour,
+    // but useful for diagnostics ("this backup is from app 0.3.1").
     appVersion: z.string(),
     decks: z
       .array(BackupDeckSchema)
@@ -109,12 +107,11 @@ export const BackupFileV1Schema = z
         message: "review log ids must be unique",
       }),
   })
-  // Card ids are the primary key of the Dexie `cards` table (keyed by `id`),
-  // so two different decks carrying the same card id would either fail or
-  // silently overwrite on restore — and `reviewStates.cardId` becomes
-  // ambiguous. The per-deck uniqueness refine() above still fires first for
-  // localised errors; this global check is the load-bearing one for restore
-  // safety.
+  // Card ids are the primary key of the Dexie `cards` table; two decks
+  // carrying the same card id would silently overwrite on restore and make
+  // `reviewStates.cardId` ambiguous. The per-deck uniqueness check above
+  // fires first for localised errors — this global check is the
+  // load-bearing one for restore safety.
   .refine(
     (file) => {
       const allIds = file.decks.flatMap((deck) => deck.cards.map((card) => card.id));
@@ -122,11 +119,11 @@ export const BackupFileV1Schema = z
     },
     { message: "card ids must be globally unique across all decks" },
   )
-  // Restore is a clean-slate wipe-and-replace (ADR-0001) — the parser is the
-  // only gate between the file on disk and the live IndexedDB. Dangling
-  // references would survive that gate as orphaned rows: review history with
-  // no card to attribute it to, decks pointing at a deck-set that doesn't
-  // exist. We reject all three shapes here so a corrupt or hand-edited file
+  // Restore is clean-slate wipe-and-replace (ADR-0011). The parser is the
+  // only gate between the file on disk and the live IndexedDB; dangling
+  // references would survive as orphan rows after restore (review history
+  // attributed to a card that no longer exists, decks pointing at a missing
+  // set). We reject all three shapes here so a corrupt or hand-edited file
   // can never produce orphans.
   .refine(
     (file) => {

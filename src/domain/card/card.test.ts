@@ -7,8 +7,10 @@ import {
   TagTooLongError,
   createCard,
   extractTagsFromCards,
+  filterCards,
   normalizeTag,
   normalizeTags,
+  tagCountsForFilter,
   updateCard,
   validateCardSize,
 } from "@/domain/card";
@@ -219,5 +221,144 @@ describe("extractTagsFromCards", () => {
   it("ignores cards with no tags", () => {
     const result = extractTagsFromCards([card("c1", []), card("c2", ["a"])]);
     expect(result).toEqual([{ tag: "a", count: 1 }]);
+  });
+});
+
+describe("filterCards", () => {
+  const make = (id: string, front: string, back: string, tags: string[] = []): Card => ({
+    id,
+    deckId: "deck-0001",
+    front,
+    back,
+    tags,
+  });
+
+  const cards: Card[] = [
+    make("c1", "Bonjour", "Guten Tag", ["französisch"]),
+    make("c2", "Bonsoir", "Guten Abend", ["französisch", "abend"]),
+    make("c3", "Hallo", "Hello", ["englisch"]),
+    make("c4", "Frosch", "Frog ![pic](data:image/png;base64,iVBOR=)", ["tier", "englisch"]),
+    make("c5", "Apfel", "Apple", ["essen"]),
+  ];
+
+  it("returns all cards when no filters are applied", () => {
+    expect(filterCards(cards)).toEqual(cards);
+  });
+
+  it("ignores an empty/whitespace query (treats as no query)", () => {
+    expect(filterCards(cards, { query: "" })).toEqual(cards);
+    expect(filterCards(cards, { query: "   " })).toEqual(cards);
+  });
+
+  it("matches the query case-insensitively against front", () => {
+    const result = filterCards(cards, { query: "bonjour" });
+    expect(result.map((c) => c.id)).toEqual(["c1"]);
+    const upper = filterCards(cards, { query: "BONJOUR" });
+    expect(upper.map((c) => c.id)).toEqual(["c1"]);
+  });
+
+  it("matches the query case-insensitively against back", () => {
+    const result = filterCards(cards, { query: "abend" });
+    // c2 has 'abend' in back ("Guten Abend") — also as a tag, but back-match is what fires here
+    expect(result.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("does substring matching (no word-boundary requirement)", () => {
+    const result = filterCards(cards, { query: "bons" });
+    expect(result.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("returns an empty list when the query matches nothing", () => {
+    expect(filterCards(cards, { query: "xyz" })).toEqual([]);
+  });
+
+  it("matches against the Markdown source, including alt-text in image syntax", () => {
+    const result = filterCards(cards, { query: "pic" });
+    expect(result.map((c) => c.id)).toEqual(["c4"]);
+  });
+
+  it("does not match the query against tags", () => {
+    // 'essen' is only a tag on c5 — no substring in front/back.
+    expect(filterCards(cards, { query: "essen" })).toEqual([]);
+  });
+
+  it("ignores an empty tags array (treats as no tag filter)", () => {
+    expect(filterCards(cards, { tags: [] })).toEqual(cards);
+  });
+
+  it("AND-matches across multiple tags", () => {
+    const result = filterCards(cards, { tags: ["französisch", "abend"] });
+    expect(result.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("returns [] when no card carries all required tags", () => {
+    expect(filterCards(cards, { tags: ["französisch", "tier"] })).toEqual([]);
+  });
+
+  it("respects status='due' using the supplied dueCardIds set", () => {
+    const dueCardIds = new Set(["c1", "c4"]);
+    const result = filterCards(cards, { status: "due", dueCardIds });
+    expect(result.map((c) => c.id)).toEqual(["c1", "c4"]);
+  });
+
+  it("status='due' with no dueCardIds excludes everything (defensive)", () => {
+    expect(filterCards(cards, { status: "due" })).toEqual([]);
+  });
+
+  it("status='all' ignores dueCardIds entirely", () => {
+    expect(filterCards(cards, { status: "all", dueCardIds: new Set(["c1"]) })).toEqual(cards);
+  });
+
+  it("AND-combines query, tags, and status", () => {
+    const dueCardIds = new Set(["c2", "c4"]);
+    const result = filterCards(cards, {
+      query: "bon",
+      tags: ["französisch"],
+      status: "due",
+      dueCardIds,
+    });
+    // c1 matches query+tag but is not due; c2 matches all three; c4 not.
+    expect(result.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("preserves input order", () => {
+    const reordered = [...cards].reverse();
+    const result = filterCards(reordered, { tags: ["englisch"] });
+    expect(result.map((c) => c.id)).toEqual(["c4", "c3"]);
+  });
+});
+
+describe("tagCountsForFilter", () => {
+  const make = (id: string, front: string, back: string, tags: string[] = []): Card => ({
+    id,
+    deckId: "deck-0001",
+    front,
+    back,
+    tags,
+  });
+
+  it("counts tags across all cards when no filter is applied", () => {
+    const cards = [make("c1", "a", "b", ["x", "y"]), make("c2", "c", "d", ["x"])];
+    expect(tagCountsForFilter(cards)).toEqual([
+      { tag: "x", count: 2 },
+      { tag: "y", count: 1 },
+    ]);
+  });
+
+  it("respects the query when computing counts", () => {
+    const cards = [make("c1", "frosch", "frog", ["tier"]), make("c2", "apfel", "apple", ["essen"])];
+    expect(tagCountsForFilter(cards, { query: "frog" })).toEqual([{ tag: "tier", count: 1 }]);
+  });
+
+  it("respects the status when computing counts", () => {
+    const cards = [make("c1", "a", "b", ["x"]), make("c2", "c", "d", ["x", "y"])];
+    const counts = tagCountsForFilter(cards, {
+      status: "due",
+      dueCardIds: new Set(["c2"]),
+    });
+    expect(counts).toEqual([
+      { tag: "x", count: 1 },
+      { tag: "y", count: 1 },
+    ]);
   });
 });

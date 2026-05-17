@@ -35,7 +35,7 @@ describe("FlipcardsDatabase", () => {
     instance = new FlipcardsDatabase();
     await instance.open();
 
-    expect(instance.verno).toBe(3);
+    expect(instance.verno).toBe(4);
     expect(instance.tables.map((t) => t.name).sort()).toEqual([
       "cards",
       "deckSets",
@@ -46,10 +46,10 @@ describe("FlipcardsDatabase", () => {
   });
 
   // ADR-0016 axis #2: every Dexie schema bump ships with an upgrade-hook AND a
-  // unit test of the upgrade path. This test pins down the v1 → v3 migration
-  // by writing a pre-v2 fixture (no tags, legacy `due` column) into a side
-  // DB, then re-opening under the *production* FlipcardsDatabase class — that
-  // way the upgrade hooks under test are the same ones shipped to users. If
+  // unit test of the upgrade path. This test pins down the v1 → current
+  // migration by writing a pre-v2 fixture (no tags, legacy `due` column) into
+  // a side DB, then re-opening under the *production* FlipcardsDatabase class
+  // — the upgrade hooks under test are the same ones shipped to users. If
   // anyone touches them, this test breaks loudly.
   it("upgrades pre-v2 rows: backfills missing tags and renames due → nextDue", async () => {
     const dbName = "flipcards-migration-fixture";
@@ -76,11 +76,11 @@ describe("FlipcardsDatabase", () => {
     v1.close();
 
     // Step 2 — re-open under the production schema. Dexie should run the real
-    // v1→v2 and v2→v3 upgrade callbacks (defined in `database.ts`).
+    // v1→v2, v2→v3, and v3→v4 upgrade callbacks (defined in `database.ts`).
     const upgraded = new MigrationFixtureDatabase(dbName);
     await upgraded.open();
 
-    expect(upgraded.verno).toBe(3);
+    expect(upgraded.verno).toBe(4);
 
     const card = await upgraded.cards.get("card-legacy");
     expect(card?.tags).toEqual([]);

@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import {
   BACKUP_FORMAT,
   type BackupFileV1,
@@ -6,7 +8,6 @@ import {
   parseBackup,
   stringifyBackup,
 } from "@/domain/backup";
-import { describe, expect, it } from "vitest";
 
 function expectOk<T, E>(result: { ok: true; value: T } | { ok: false; error: E }): T {
   if (!result.ok) throw new Error(`expected ok, got: ${JSON.stringify(result.error)}`);
@@ -26,18 +27,8 @@ const sampleDeck = {
   description: "Voyage en France",
   deckSetId: "set-aaaaaaaa",
   cards: [
-    {
-      id: "card-aaaaaaa1",
-      front: "l'ouïe",
-      back: "das Gehör",
-      tags: ["körper"],
-    },
-    {
-      id: "card-aaaaaaa2",
-      front: "la main",
-      back: "die Hand",
-      tags: [],
-    },
+    { id: "card-aaaaaaa1", front: "l'ouïe", back: "das Gehör", tags: ["körper"] },
+    { id: "card-aaaaaaa2", front: "la main", back: "die Hand", tags: [] },
   ],
 };
 
@@ -65,6 +56,7 @@ function makeValidBackup(): BackupFileV1 {
     reviewStates: [sampleReviewState],
     reviews: [sampleReviewLog],
     now: () => new Date("2026-05-17T08:00:00Z"),
+    appVersion: "0.1.0",
   });
 }
 
@@ -80,29 +72,27 @@ describe("exportBackup", () => {
     expect(file.exportedAt).toBe("2026-05-17T08:00:00.000Z");
   });
 
-  it("includes the app SemVer for diagnostic purposes", () => {
+  it("includes the supplied appVersion (diagnostic)", () => {
     const file = makeValidBackup();
-    // We don't assert a specific value — the version moves with releases.
-    // Shape is enough: SemVer-ish string.
-    expect(file.appVersion).toMatch(/^\d+\.\d+\.\d+/);
+    expect(file.appVersion).toBe("0.1.0");
   });
 });
 
 describe("parseBackup — happy path", () => {
-  it("accepts a round-tripped export", () => {
+  it("round-trips a freshly exported file", () => {
     const original = makeValidBackup();
     const parsed = expectOk(parseBackup(stringifyBackup(original)));
     expect(parsed).toEqual(original);
   });
 
-  it("preserves deck-set membership and review-state SM-2 fields", () => {
+  it("preserves deck-set membership and SM-2 fields", () => {
     const original = makeValidBackup();
     const parsed = expectOk(parseBackup(stringifyBackup(original)));
     expect(parsed.decks[0].deckSetId).toBe("set-aaaaaaaa");
     expect(parsed.reviewStates[0].easeFactor).toBe(2.5);
   });
 
-  it("round-trips review-log entries (ADR-0012: log belongs in Backup)", () => {
+  it("round-trips review-log entries (ADR-0012)", () => {
     const extra = {
       id: "review-aaaaaaa2",
       cardId: "card-aaaaaaa2",
@@ -117,19 +107,53 @@ describe("parseBackup — happy path", () => {
       reviewStates: [sampleReviewState],
       reviews: [sampleReviewLog, extra],
       now: () => new Date("2026-05-17T08:00:00Z"),
+      appVersion: "0.1.0",
     });
     const parsed = expectOk(parseBackup(stringifyBackup(original)));
     expect(parsed.reviews).toEqual([sampleReviewLog, extra]);
   });
+
+  it("round-trips deck and deck-set names well over 200 chars", () => {
+    // The domain/UI doesn't cap name length, so a locally valid long name must
+    // survive a backup round-trip. Regression for codex review on PR #50: the
+    // schema previously rejected names > 200 chars, which broke round-trip for
+    // users who'd legally created a long-named deck.
+    const longName = "ä".repeat(500);
+    const longDescription = "x".repeat(2000);
+    const original = exportBackup({
+      decks: [{ ...sampleDeck, name: longName, description: longDescription }],
+      deckSets: [{ ...sampleDeckSet, name: longName }],
+      reviewStates: [sampleReviewState],
+      reviews: [sampleReviewLog],
+      now: () => new Date("2026-05-17T08:00:00Z"),
+      appVersion: "0.1.0",
+    });
+    const parsed = expectOk(parseBackup(stringifyBackup(original)));
+    expect(parsed.decks[0].name).toBe(longName);
+    expect(parsed.deckSets[0].name).toBe(longName);
+  });
+
+  it("accepts an empty backup (no decks, no review data)", () => {
+    const empty = exportBackup({
+      decks: [],
+      deckSets: [],
+      reviewStates: [],
+      reviews: [],
+      now: () => new Date("2026-05-17T08:00:00Z"),
+      appVersion: "0.1.0",
+    });
+    const parsed = expectOk(parseBackup(stringifyBackup(empty)));
+    expect(parsed.decks).toEqual([]);
+  });
 });
 
-describe("parseBackup — errors as a discriminated union", () => {
+describe("parseBackup — discriminated errors", () => {
   it("returns JsonSyntaxError on malformed JSON", () => {
     const e = unwrapErr(parseBackup("{ not json"));
     expect(e.kind).toBe("JsonSyntaxError");
   });
 
-  it("returns UnknownFormat when the `format` field is missing", () => {
+  it("returns UnknownFormat when the `format` field is missing (AC: no formatVersion)", () => {
     const e = unwrapErr(parseBackup(JSON.stringify({ formatVersion: 1 })));
     expect(e.kind).toBe("UnknownFormat");
     if (e.kind === "UnknownFormat") {
@@ -138,11 +162,8 @@ describe("parseBackup — errors as a discriminated union", () => {
     }
   });
 
-  it("returns UnknownFormat when a Shared-Deck JSON is fed in", () => {
-    const wrong = JSON.stringify({
-      format: "flipcards.shared-deck",
-      formatVersion: 1,
-    });
+  it("returns UnknownFormat when a Shared-Deck file is fed in", () => {
+    const wrong = JSON.stringify({ format: "flipcards.shared-deck", formatVersion: 1 });
     const e = unwrapErr(parseBackup(wrong));
     expect(e.kind).toBe("UnknownFormat");
     if (e.kind === "UnknownFormat") {
@@ -151,8 +172,8 @@ describe("parseBackup — errors as a discriminated union", () => {
   });
 
   it("rejects a file without a formatVersion as IncompatibleVersion", () => {
-    // The acceptance criterion explicitly calls out this case: "parseBackup
-    // lehnt Files ohne formatVersion ab mit klarer Fehlermeldung."
+    // Ticket AC: "Datei ohne formatVersion wird abgelehnt mit klarer
+    // Fehlermeldung."
     const noVersion = JSON.stringify({ format: BACKUP_FORMAT });
     const e = unwrapErr(parseBackup(noVersion));
     expect(e.kind).toBe("IncompatibleVersion");
@@ -171,6 +192,7 @@ describe("parseBackup — errors as a discriminated union", () => {
       decks: [],
       deckSets: [],
       reviewStates: [],
+      reviews: [],
     });
     const e = unwrapErr(parseBackup(tooNew));
     expect(e.kind).toBe("IncompatibleVersion");
@@ -183,12 +205,7 @@ describe("parseBackup — errors as a discriminated union", () => {
     const file = makeValidBackup();
     const broken: BackupFileV1 = {
       ...file,
-      decks: [
-        {
-          ...file.decks[0],
-          cards: [file.decks[0].cards[0], file.decks[0].cards[0]],
-        },
-      ],
+      decks: [{ ...file.decks[0], cards: [file.decks[0].cards[0], file.decks[0].cards[0]] }],
     };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
@@ -202,43 +219,36 @@ describe("parseBackup — errors as a discriminated union", () => {
   });
 
   it("returns SchemaError when a reviewState references an unknown cardId", () => {
-    // Restore wipes-and-replaces the live DB (ADR-0001). A reviewState whose
-    // cardId doesn't match any card in any deck would survive that as an
-    // orphan row — learning history attributed to a card that no longer
-    // exists. The parser must reject it.
+    // Restore wipes-and-replaces (ADR-0011). An orphan review state would
+    // survive that gate as learning history attributed to a missing card.
     const file = makeValidBackup();
     const broken: BackupFileV1 = {
       ...file,
-      reviewStates: [{ ...sampleReviewState, cardId: "card-ghostzzz" }],
+      reviewStates: [{ ...sampleReviewState, cardId: "card-ghostzz" }],
     };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
     if (e.kind === "SchemaError") {
-      const message = e.issues.map((i) => i.message).join(" | ");
-      expect(message).toMatch(/reviewStates\.cardId/);
+      const msg = e.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/reviewStates\.cardId/);
     }
   });
 
-  it("returns SchemaError when a reviews entry references an unknown cardId", () => {
-    // Same rationale as above for the per-rating log (ADR-0012): orphaned
-    // log rows would silently inflate heatmap/streak counts after restore.
+  it("returns SchemaError when a reviews row references an unknown cardId", () => {
     const file = makeValidBackup();
     const broken: BackupFileV1 = {
       ...file,
-      reviews: [{ ...sampleReviewLog, cardId: "card-ghostzzz" }],
+      reviews: [{ ...sampleReviewLog, cardId: "card-ghostzz" }],
     };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
     if (e.kind === "SchemaError") {
-      const message = e.issues.map((i) => i.message).join(" | ");
-      expect(message).toMatch(/reviews\.cardId/);
+      const msg = e.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/reviews\.cardId/);
     }
   });
 
-  it("returns SchemaError when a deck's deckSetId references an unknown deck-set", () => {
-    // A deck pointing at a missing deck-set would render as "ungrouped" in
-    // the UI on restore but still carry the broken pointer in storage. We
-    // refuse the file outright rather than silently dropping the reference.
+  it("returns SchemaError when a deck's deckSetId references an unknown set", () => {
     const file = makeValidBackup();
     const broken: BackupFileV1 = {
       ...file,
@@ -247,33 +257,54 @@ describe("parseBackup — errors as a discriminated union", () => {
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
     if (e.kind === "SchemaError") {
-      const message = e.issues.map((i) => i.message).join(" | ");
-      expect(message).toMatch(/deckSetId/);
+      const msg = e.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/deckSetId/);
     }
   });
 
   it("returns SchemaError when two decks share a card id (global uniqueness)", () => {
-    // Card ids are the primary key on the Dexie `cards` table — duplicates
-    // across decks would silently overwrite on restore. The schema must
-    // enforce global uniqueness, not just per-deck.
     const file = makeValidBackup();
-    const sharedCard = file.decks[0].cards[0];
+    const shared = file.decks[0].cards[0];
     const broken: BackupFileV1 = {
       ...file,
-      decks: [
-        file.decks[0],
-        {
-          id: "deck-bbbbbbbb",
-          name: "Andere Sprache",
-          cards: [sharedCard],
-        },
-      ],
+      decks: [file.decks[0], { id: "deck-bbbbbbbb", name: "Andere Sprache", cards: [shared] }],
     };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
     if (e.kind === "SchemaError") {
-      const message = e.issues.map((i) => i.message).join(" | ");
-      expect(message).toMatch(/card ids must be globally unique/);
+      const msg = e.issues.map((i) => i.message).join(" | ");
+      expect(msg).toMatch(/card ids must be globally unique/);
+    }
+  });
+
+  it("returns CardSizeError when a card payload exceeds the ADR-0013 limit", () => {
+    // ADR-0013 caps per-Card payload at 5 MB of inlined base64. We forge a
+    // single oversized card by embedding a data: URI whose base64 body is
+    // larger than the limit. The schema accepts any string for front/back
+    // (no per-field size limit); semantic validation in `validate.ts` is the
+    // gate.
+    const oversized = "A".repeat(5 * 1024 * 1024 + 16);
+    const file = makeValidBackup();
+    const broken: BackupFileV1 = {
+      ...file,
+      decks: [
+        {
+          ...file.decks[0],
+          cards: [
+            {
+              ...file.decks[0].cards[0],
+              front: `![](data:image/png;base64,${oversized})`,
+            },
+            file.decks[0].cards[1],
+          ],
+        },
+      ],
+    };
+    const e = unwrapErr(parseBackup(JSON.stringify(broken)));
+    expect(e.kind).toBe("CardSizeError");
+    if (e.kind === "CardSizeError") {
+      expect(e.violations).toHaveLength(1);
+      expect(e.violations[0].cardId).toBe("card-aaaaaaa1");
     }
   });
 });

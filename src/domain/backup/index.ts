@@ -5,6 +5,7 @@
 //   2. discriminate on `format`→ UnknownFormat with expected/actual
 //   3. check `formatVersion`   → IncompatibleVersion if newer; migrate if older
 //   4. Zod-validate            → SchemaError carrying zod issues
+//   5. semantic checks         → CardSizeError per ADR-0013
 //
 // No throws. Every failure mode is reachable as a discriminated `BackupError`
 // variant so the import UI can render targeted messages.
@@ -20,6 +21,7 @@ import {
   BackupFileV1Schema,
   CURRENT_BACKUP_FORMAT_VERSION,
 } from "./schema";
+import { type CardSizeViolation, validateBackupCardSizes } from "./validate";
 
 export type {
   BackupDeck,
@@ -29,6 +31,7 @@ export type {
   BackupReviewState,
 } from "./schema";
 export { BACKUP_FORMAT, CURRENT_BACKUP_FORMAT_VERSION } from "./schema";
+export type { CardSizeViolation } from "./validate";
 
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
@@ -41,7 +44,8 @@ export type BackupError =
       actual: unknown;
       direction: "newer" | "older-no-migration";
     }
-  | { kind: "SchemaError"; issues: z.core.$ZodIssue[] };
+  | { kind: "SchemaError"; issues: z.core.$ZodIssue[] }
+  | { kind: "CardSizeError"; violations: readonly CardSizeViolation[] };
 
 const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
 const err = <E>(error: E): Result<never, E> => ({ ok: false, error });
@@ -107,6 +111,11 @@ export function parseBackup(json: string): Result<BackupFileV1, BackupError> {
     return err({ kind: "SchemaError", issues: zodResult.error.issues });
   }
 
+  const violations = validateBackupCardSizes(zodResult.data);
+  if (violations.length > 0) {
+    return err({ kind: "CardSizeError", violations });
+  }
+
   return ok(zodResult.data);
 }
 
@@ -117,6 +126,8 @@ export type ExportBackupInput = {
   reviews: BackupFileV1["reviews"];
   /** Override `Date.now()` for deterministic tests. */
   now?: () => Date;
+  /** Override `APP_VERSION` for deterministic tests. */
+  appVersion?: string;
 };
 
 // Always writes the **current** format with the current `formatVersion`.
@@ -128,7 +139,7 @@ export function exportBackup(input: ExportBackupInput): BackupFileV1 {
     format: BACKUP_FORMAT,
     formatVersion: CURRENT_BACKUP_FORMAT_VERSION,
     exportedAt: now.toISOString(),
-    appVersion: APP_VERSION,
+    appVersion: input.appVersion ?? APP_VERSION,
     decks: input.decks,
     deckSets: input.deckSets,
     reviewStates: input.reviewStates,

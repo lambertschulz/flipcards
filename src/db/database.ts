@@ -15,6 +15,7 @@ export interface DeckRow {
 export interface DeckSetRow {
   id: string;
   name: string;
+  description?: string;
 }
 
 export interface CardRow {
@@ -100,6 +101,15 @@ export class FlipcardsDatabase extends Dexie {
             if (row.intervalDays === undefined) row.intervalDays = 0;
           });
       });
+
+    // v4 — deck-sets gain an optional `description` (issue #19 Deck-Set-CRUD).
+    // The new field is purely additive; rows without it are valid because the
+    // column is optional. No `stores()` change is needed (description is not
+    // indexed), but the explicit version() bump pins the schema so future
+    // migrations have a clean predecessor to upgrade from.
+    this.version(4).stores({
+      deckSets: "id, name",
+    });
   }
 }
 
