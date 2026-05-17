@@ -9,14 +9,16 @@ import { useEffect, useState } from "react";
  *
  * Dismissible per session: state lives in component memory (no localStorage),
  * so it returns after a reload or fresh mount until the quota actually
- * recovers. Issue #20 brief: "dismissible per Session (nicht persistent)".
+ * recovers. Issue #27 brief: "dismissible per Session (nicht persistent)".
  *
  * The "In Einstellungen öffnen" link deep-links into the Speicher-Section of
  * the Settings page (`/settings#storage`, see `settings-page.tsx`).
  *
- * Refresh strategy: polls every 30 s while mounted. A more elegant signal would
- * be hooking into Dexie writes, but quota changes are slow enough that polling
- * keeps the implementation small.
+ * Refresh strategy: estimate runs **once on mount only**. Issue #27 explicitly
+ * lists "Realtime-Update des Banners während der Nutzung (nur beim Mount neu
+ * prüfen)" as out of scope. Users see a fresh estimate on every navigation
+ * back to the home screen — that's enough granularity for a slow-moving
+ * quota signal.
  */
 export function StorageQuotaBanner() {
   const quota = useStorageQuota();
@@ -78,16 +80,12 @@ function useStorageQuota(): StorageQuota | null {
     if (!supported) return;
 
     let cancelled = false;
-    const refresh = async () => {
-      const est = await navigator.storage.estimate();
+    void navigator.storage.estimate().then((est) => {
       if (cancelled) return;
       setQuota(classifyQuota(est.usage ?? 0, est.quota ?? 0));
-    };
-    void refresh();
-    const interval = setInterval(refresh, 30_000);
+    });
     return () => {
       cancelled = true;
-      clearInterval(interval);
     };
   }, []);
 
