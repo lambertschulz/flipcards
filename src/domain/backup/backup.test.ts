@@ -49,11 +49,21 @@ const sampleReviewState = {
   nextDue: 1_715_900_000_000,
 };
 
+const sampleReviewLog = {
+  id: "review-aaaaaaa1",
+  cardId: "card-aaaaaaa1",
+  timestamp: 1_715_899_000_000,
+  rating: "good" as const,
+  intervalAfter: 6,
+  easeAfter: 2.5,
+};
+
 function makeValidBackup(): BackupFileV1 {
   return exportBackup({
     decks: [sampleDeck],
     deckSets: [sampleDeckSet],
     reviewStates: [sampleReviewState],
+    reviews: [sampleReviewLog],
     now: () => new Date("2026-05-17T08:00:00Z"),
   });
 }
@@ -90,6 +100,26 @@ describe("parseBackup — happy path", () => {
     const parsed = expectOk(parseBackup(stringifyBackup(original)));
     expect(parsed.decks[0].deckSetId).toBe("set-aaaaaaaa");
     expect(parsed.reviewStates[0].easeFactor).toBe(2.5);
+  });
+
+  it("round-trips review-log entries (ADR-0012: log belongs in Backup)", () => {
+    const extra = {
+      id: "review-aaaaaaa2",
+      cardId: "card-aaaaaaa2",
+      timestamp: 1_715_899_500_000,
+      rating: "again" as const,
+      intervalAfter: 0,
+      easeAfter: 2.3,
+    };
+    const original = exportBackup({
+      decks: [sampleDeck],
+      deckSets: [sampleDeckSet],
+      reviewStates: [sampleReviewState],
+      reviews: [sampleReviewLog, extra],
+      now: () => new Date("2026-05-17T08:00:00Z"),
+    });
+    const parsed = expectOk(parseBackup(stringifyBackup(original)));
+    expect(parsed.reviews).toEqual([sampleReviewLog, extra]);
   });
 });
 
@@ -169,5 +199,30 @@ describe("parseBackup — errors as a discriminated union", () => {
     const broken = { ...file, decks: [{ ...file.decks[0], id: "x" }] };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");
+  });
+
+  it("returns SchemaError when two decks share a card id (global uniqueness)", () => {
+    // Card ids are the primary key on the Dexie `cards` table — duplicates
+    // across decks would silently overwrite on restore. The schema must
+    // enforce global uniqueness, not just per-deck.
+    const file = makeValidBackup();
+    const sharedCard = file.decks[0].cards[0];
+    const broken: BackupFileV1 = {
+      ...file,
+      decks: [
+        file.decks[0],
+        {
+          id: "deck-bbbbbbbb",
+          name: "Andere Sprache",
+          cards: [sharedCard],
+        },
+      ],
+    };
+    const e = unwrapErr(parseBackup(JSON.stringify(broken)));
+    expect(e.kind).toBe("SchemaError");
+    if (e.kind === "SchemaError") {
+      const message = e.issues.map((i) => i.message).join(" | ");
+      expect(message).toMatch(/card ids must be globally unique/);
+    }
   });
 });

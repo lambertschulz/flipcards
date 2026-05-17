@@ -65,32 +65,66 @@ const BackupReviewStateSchema = z.object({
   nextDue: z.number().int(),
 });
 
-export const BackupFileV1Schema = z.object({
-  format: z.literal(BACKUP_FORMAT),
-  formatVersion: z.literal(CURRENT_BACKUP_FORMAT_VERSION),
-  exportedAt: z.string(),
-  // App-SemVer at export time. Informational — drives no parse behaviour, but
-  // useful for diagnostics ("this backup is from app 0.3.1") and for future
-  // compat hints.
-  appVersion: z.string(),
-  decks: z
-    .array(BackupDeckSchema)
-    .refine((decks) => new Set(decks.map((d) => d.id)).size === decks.length, {
-      message: "deck ids must be unique",
-    }),
-  deckSets: z
-    .array(BackupDeckSetSchema)
-    .refine((sets) => new Set(sets.map((s) => s.id)).size === sets.length, {
-      message: "deckSet ids must be unique",
-    }),
-  reviewStates: z
-    .array(BackupReviewStateSchema)
-    .refine((states) => new Set(states.map((s) => s.cardId)).size === states.length, {
-      message: "reviewState cardIds must be unique",
-    }),
+// Review-Log row. ADR-0012 pins this table as the source of truth for stats
+// surfaces (heatmap, streak, per-card history). It belongs in Backup because
+// Backup is the full local snapshot (ADR-0001) — losing it on restore would
+// silently wipe the user's learning history. Shape mirrors `ReviewLogRow` in
+// the Dexie schema.
+const BackupReviewLogSchema = z.object({
+  id: idSchema,
+  cardId: idSchema,
+  timestamp: z.number().int(),
+  rating: z.enum(["again", "hard", "good", "easy"]),
+  intervalAfter: z.number().nonnegative(),
+  easeAfter: z.number().positive(),
 });
+
+export const BackupFileV1Schema = z
+  .object({
+    format: z.literal(BACKUP_FORMAT),
+    formatVersion: z.literal(CURRENT_BACKUP_FORMAT_VERSION),
+    exportedAt: z.string(),
+    // App-SemVer at export time. Informational — drives no parse behaviour, but
+    // useful for diagnostics ("this backup is from app 0.3.1") and for future
+    // compat hints.
+    appVersion: z.string(),
+    decks: z
+      .array(BackupDeckSchema)
+      .refine((decks) => new Set(decks.map((d) => d.id)).size === decks.length, {
+        message: "deck ids must be unique",
+      }),
+    deckSets: z
+      .array(BackupDeckSetSchema)
+      .refine((sets) => new Set(sets.map((s) => s.id)).size === sets.length, {
+        message: "deckSet ids must be unique",
+      }),
+    reviewStates: z
+      .array(BackupReviewStateSchema)
+      .refine((states) => new Set(states.map((s) => s.cardId)).size === states.length, {
+        message: "reviewState cardIds must be unique",
+      }),
+    reviews: z
+      .array(BackupReviewLogSchema)
+      .refine((rows) => new Set(rows.map((r) => r.id)).size === rows.length, {
+        message: "review log ids must be unique",
+      }),
+  })
+  // Card ids are the primary key of the Dexie `cards` table (keyed by `id`),
+  // so two different decks carrying the same card id would either fail or
+  // silently overwrite on restore — and `reviewStates.cardId` becomes
+  // ambiguous. The per-deck uniqueness refine() above still fires first for
+  // localised errors; this global check is the load-bearing one for restore
+  // safety.
+  .refine(
+    (file) => {
+      const allIds = file.decks.flatMap((deck) => deck.cards.map((card) => card.id));
+      return new Set(allIds).size === allIds.length;
+    },
+    { message: "card ids must be globally unique across all decks" },
+  );
 
 export type BackupDeck = z.infer<typeof BackupDeckSchema>;
 export type BackupDeckSet = z.infer<typeof BackupDeckSetSchema>;
 export type BackupReviewState = z.infer<typeof BackupReviewStateSchema>;
+export type BackupReviewLog = z.infer<typeof BackupReviewLogSchema>;
 export type BackupFileV1 = z.infer<typeof BackupFileV1Schema>;

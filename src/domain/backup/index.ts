@@ -25,6 +25,7 @@ export type {
   BackupDeck,
   BackupDeckSet,
   BackupFileV1,
+  BackupReviewLog,
   BackupReviewState,
 } from "./schema";
 export { BACKUP_FORMAT, CURRENT_BACKUP_FORMAT_VERSION } from "./schema";
@@ -113,6 +114,7 @@ export type ExportBackupInput = {
   decks: BackupFileV1["decks"];
   deckSets: BackupFileV1["deckSets"];
   reviewStates: BackupFileV1["reviewStates"];
+  reviews: BackupFileV1["reviews"];
   /** Override `Date.now()` for deterministic tests. */
   now?: () => Date;
 };
@@ -130,6 +132,7 @@ export function exportBackup(input: ExportBackupInput): BackupFileV1 {
     decks: input.decks,
     deckSets: input.deckSets,
     reviewStates: input.reviewStates,
+    reviews: input.reviews,
   };
 }
 
