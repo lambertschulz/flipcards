@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vitest/config";
 import pkg from "./package.json" with { type: "json" };
+import { buildPwaManifest } from "./src/lib/pwa/manifest";
 
 // ADR-0016 axis #1: `package.json#version` is the single source of truth for
 // the app SemVer. Vite bakes it into the bundle as the global identifier
@@ -27,32 +28,10 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: null,
       includeAssets: ["icons/icon-192.png", "icons/icon-512.png"],
-      manifest: {
-        name: "Flipcards",
-        short_name: "Flipcards",
-        description:
-          "Browserbasierte Spaced-Repetition-Lernanwendung. Alle Daten lokal, kein Account.",
-        lang: "de",
-        // Hash-Routing (ADR-0008): GitHub-Pages serves us under a sub-path
-        // and the app expects to live at the index of whatever origin/path
-        // it's deployed to. `"./"` keeps the manifest portable across
-        // deploy URLs without baking the GH-Pages prefix into the file.
-        start_url: "./",
-        scope: "./",
-        display: "standalone",
-        background_color: "#0f172a",
-        theme_color: "#0f172a",
-        icons: [
-          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
-          {
-            src: "icons/icon-512-maskable.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
-          },
-        ],
-      },
+      // Manifest content (incl. the SemVer `version` field, ADR-0016 axis
+      // #1) lives in `src/lib/pwa/manifest.ts` so it can be unit-tested
+      // without booting the full Vite config.
+      manifest: buildPwaManifest(pkg.version),
       workbox: {
         // Precache the built app shell. Card content (incl. embedded images)
         // lives in IndexedDB, so there's nothing else to cache — the SW
