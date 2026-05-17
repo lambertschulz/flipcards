@@ -11,7 +11,12 @@ import {
 } from "@/features/deck/deck-card-filter-bar";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+// Refresh interval for the "now" tick that drives the Due-set memo. 60s is
+// short enough that newly-due cards appear quickly without the UI thrashing,
+// and the interval is paused while the document is hidden.
+const NOW_TICK_MS = 60_000;
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
   const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
@@ -47,9 +52,53 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
   // confusion when re-entering the page).
   const [filter, setFilter] = useState<DeckCardFilterState>(EMPTY_FILTER_STATE);
 
+  // Ticking clock that drives the Due-set memo. Without this, the memo would
+  // capture `Date.now()` only when `cards`/`reviewStates` change — so if the
+  // user keeps the page open past a card's `nextDue` time without any DB
+  // write, toggling "Nur Due" or typing into the search would keep the stale
+  // Due-set and newly-due cards would stay hidden (PR #43 review feedback).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      if (intervalId !== undefined) return;
+      intervalId = setInterval(() => setNow(Date.now()), NOW_TICK_MS);
+    };
+    const stop = () => {
+      if (intervalId !== undefined) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.hidden) {
+        stop();
+      } else {
+        // Refresh immediately when the tab becomes visible again so a
+        // long-backgrounded page doesn't show a stale Due-set for up to
+        // NOW_TICK_MS after returning.
+        setNow(Date.now());
+        start();
+      }
+    };
+    if (typeof document !== "undefined" && document.hidden) {
+      // Don't tick while hidden; visibilitychange will start the interval.
+    } else {
+      start();
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    return () => {
+      stop();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
+  }, []);
+
   const dueCardIds = useMemo<Set<string> | undefined>(() => {
     if (!cards || reviewStates === undefined) return undefined;
-    const now = Date.now();
     const stateById = new Map(reviewStates.map((s) => [s.cardId, s]));
     const ids = new Set<string>();
     for (const card of cards) {
@@ -58,7 +107,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
       if (!state || isDue(state, now)) ids.add(card.id);
     }
     return ids;
-  }, [cards, reviewStates]);
+  }, [cards, reviewStates, now]);
 
   const visibleCards = useMemo(() => {
     if (!cards) return undefined;

@@ -13,8 +13,8 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -258,6 +258,76 @@ describe("DeckDetailPage filter bar (issue #10)", () => {
     // Status back to default ("Alle").
     const alleBtn = screen.getByRole("button", { name: /^Alle$/i });
     expect(alleBtn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("recomputes the Due-set as wall-clock time advances (no DB writes)", async () => {
+    // Regression test for PR #43 review feedback: the dueCardIds memo used
+    // to capture Date.now() only when cards/reviewStates changed, so a card
+    // that became due while the page sat idle stayed hidden under "Nur Due".
+    // With a ticking clock the memo invalidates on each tick and the card
+    // appears on the next render.
+    const DUE_IN_MS = 5 * 60 * 1000; // 5 minutes
+    const TICK_INTERVAL_MS = 60_000; // matches NOW_TICK_MS in deck-detail-page
+
+    // DB setup happens on real timers (fake-indexeddb relies on setTimeout).
+    const baseTime = Date.now();
+    const deck = await createDeckInDb({ name: "D" });
+    const becomesDue = await createCardInDb({
+      deckId: deck.id,
+      front: "BecomesDue",
+      back: "x",
+    });
+    // Schedule the card 5 minutes in the future (not currently due).
+    await putReviewState(becomesDue.id, {
+      ...INITIAL_REVIEW_STATE,
+      nextDue: baseTime + DUE_IN_MS,
+    });
+
+    const router = await setupRouter(deck.id);
+
+    // Switch to fake timers BEFORE mounting, so the page's setInterval is
+    // registered against the fake clock. Only fake the timer pieces we
+    // need — leaving queueMicrotask/Promise alone keeps React + Dexie
+    // microtasks flushing normally.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(baseTime);
+
+    try {
+      render(<RouterProvider router={router} />);
+
+      // Wait for the deck and its cards to load.
+      await screen.findByLabelText(/Cards durchsuchen/i);
+
+      // Activate "Nur Due" — card is in the future so it should be hidden.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Nur Due/i }));
+      });
+
+      await waitFor(() => {
+        // Empty-results state appears once the card is filtered out.
+        expect(screen.getByText(/Keine Cards passen/i)).toBeInTheDocument();
+      });
+
+      // Advance the fake clock past nextDue without any DB writes. The
+      // page's setInterval should fire, call setNow(Date.now()), and the
+      // dueCardIds memo should recompute with the new "now".
+      vi.setSystemTime(baseTime + DUE_IN_MS + TICK_INTERVAL_MS);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
+      });
+
+      await waitFor(() => {
+        const items = cardListItems();
+        expect(items).toHaveLength(1);
+        expect(within(items[0]).getByText("BecomesDue")).toBeInTheDocument();
+      });
+      // Unmount while fake timers are still installed so the page's
+      // clearInterval cleanup matches the setInterval registered against
+      // the fake clock.
+      cleanup();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("AND-combines query, tag, and status filters", async () => {
