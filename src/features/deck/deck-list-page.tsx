@@ -55,9 +55,15 @@ function DeckGroups({
   decks: { id: string; name: string; deckSetId?: string }[];
   deckSets: { id: string; name: string; description?: string }[];
 }) {
+  // IndexedDB has no FK enforcement, so a deck's deckSetId may reference a
+  // set that no longer exists (stale import, partial restore, prior bug).
+  // Treat such orphan references as lose decks so the deck stays visible
+  // and the user can re-assign or clear the broken id from settings.
+  const knownSetIds = new Set(deckSets.map((s) => s.id));
   const decksBySet = new Map<string | "__lose", typeof decks>();
   for (const deck of decks) {
-    const key = deck.deckSetId ?? "__lose";
+    const key =
+      deck.deckSetId !== undefined && knownSetIds.has(deck.deckSetId) ? deck.deckSetId : "__lose";
     const list = decksBySet.get(key);
     if (list) list.push(deck);
     else decksBySet.set(key, [deck]);
