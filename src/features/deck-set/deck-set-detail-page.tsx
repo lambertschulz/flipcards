@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { addDeckToSetInDb, removeDeckFromSetInDb } from "@/db/deck-sets";
+import { exportSharedDeckSetToFile } from "@/features/shared-deck-set/export";
 import { getPendingDeletes } from "@/lib/pending-deletes";
 import {
   useIsPendingDelete,
@@ -46,6 +47,7 @@ export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
   }, [deckSetPending, navigate]);
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   if (set === null) {
     return <p className="text-sm text-slate-500">Lade Deck-Set…</p>;
@@ -81,6 +83,21 @@ export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try {
+                await exportSharedDeckSetToFile(set.id);
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            {exporting ? "Wird exportiert…" : "Deck-Set teilen"}
+          </Button>
           <Link to="/deck-set/$deckSetId/settings" params={{ deckSetId: set.id }}>
             <Button variant="outline">Deck-Set-Einstellungen</Button>
           </Link>

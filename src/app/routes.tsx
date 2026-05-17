@@ -11,6 +11,7 @@ import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { HomePage } from "@/features/home/home-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
 import { SettingsPage } from "@/features/settings/settings-page";
+import { SharedDeckSetImportPage } from "@/features/shared-deck-set/shared-deck-set-import-page";
 import { SharedDeckImportPage } from "@/features/shared-deck/shared-deck-import-page";
 import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
 import { TagSessionReviewPage } from "@/features/tag-session/tag-session-review-page";
@@ -187,6 +188,12 @@ const sharedDeckImportRoute = createRoute({
   component: SharedDeckImportPage,
 });
 
+const sharedDeckSetImportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/shared-deck-set/import",
+  component: SharedDeckSetImportPage,
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -223,5 +230,6 @@ export const routeTree = rootRoute.addChildren([
   settingsRoute,
   backupImportRoute,
   sharedDeckImportRoute,
+  sharedDeckSetImportRoute,
   aboutRoute,
 ]);

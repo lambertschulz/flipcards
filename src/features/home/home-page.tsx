@@ -304,6 +304,15 @@ function EmptyState() {
           hint="Bald verfügbar."
         />
         <EmptyStateCard
+          title="Shared Deck-Set importieren"
+          description="Importiere ein geteiltes Deck-Set (Set + alle enthaltenen Decks)."
+          action={
+            <Link to="/shared-deck-set/import">
+              <Button variant="outline">Shared Deck-Set importieren</Button>
+            </Link>
+          }
+        />
+        <EmptyStateCard
           title="Backup wiederherstellen"
           description="Stelle deine Decks aus einer Backup-Datei wieder her."
           action={
@@ -372,6 +381,9 @@ function HomeFooter() {
         >
           {busy ? "Backup wird erstellt…" : "Backup exportieren"}
         </Button>
+        <Link to="/shared-deck-set/import">
+          <Button variant="outline">Shared Deck-Set importieren</Button>
+        </Link>
         <Link to="/backup/import">
           <Button variant="outline">Backup importieren</Button>
         </Link>

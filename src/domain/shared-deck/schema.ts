@@ -76,13 +76,28 @@ const SharedDeckEntrySchema = SharedDeckMetaSchema.extend({
   cards: cardsArraySchema,
 });
 
-export const SharedDeckSetSchema = z.object({
-  format: z.literal(SHARED_DECK_SET_FORMAT),
-  formatVersion: z.literal(CURRENT_SHARED_DECK_SET_FORMAT_VERSION),
-  exportedAt: z.string(),
-  deckSet: SharedDeckSetMetaSchema,
-  decks: z.array(SharedDeckEntrySchema),
-});
+export const SharedDeckSetSchema = z
+  .object({
+    format: z.literal(SHARED_DECK_SET_FORMAT),
+    formatVersion: z.literal(CURRENT_SHARED_DECK_SET_FORMAT_VERSION),
+    exportedAt: z.string(),
+    deckSet: SharedDeckSetMetaSchema,
+    decks: z.array(SharedDeckEntrySchema),
+  })
+  // Deck ids ARE structurally unique within a set — they're the primary key
+  // of the Dexie `decks` table, and the importer's ID-match-merge logic
+  // would otherwise silently fold the second deck's cards into the first
+  // (losing the second deck's name + description metadata). Enforce at the
+  // schema boundary.
+  //
+  // Card ids, on the other hand, are NOT required to be unique across
+  // decks within a SharedDeckSet per ADR-0018 — cross-deck duplicates are
+  // explicitly allowed at the file level. The importer handles in-file
+  // collisions by keeping the first occurrence and surfacing the count in
+  // the apply summary (see apply.ts).
+  .refine((set) => new Set(set.decks.map((d) => d.id)).size === set.decks.length, {
+    message: "deck ids must be unique within the deck-set",
+  });
 
 export type SharedCard = z.infer<typeof SharedCardSchema>;
 export type SharedDeckMeta = z.infer<typeof SharedDeckMetaSchema>;
