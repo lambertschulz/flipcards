@@ -1,19 +1,23 @@
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 import { usePendingDeletes } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 
 export function DeckListPage() {
   const decks = useLiveQuery(() => db.decks.orderBy("name").toArray(), [], undefined);
-  const pending = usePendingDeletes();
-  const pendingDeckKeys = new Set(
-    pending.filter((o) => o.state === "pending" && o.key.startsWith("deck:")).map((o) => o.key),
-  );
+  // Subscribe to the pending-deletes store so the list re-renders when ops
+  // change state (e.g. pending → committing → committed). The actual hide
+  // predicate is `store.isPending(key)`, which already covers both `pending`
+  // and `committing` — keeping the row hidden through the in-flight commit
+  // window so it can't briefly flash back in.
+  usePendingDeletes();
+  const store = getPendingDeletes();
 
   const visibleDecks =
-    decks === undefined ? undefined : decks.filter((d) => !pendingDeckKeys.has(`deck:${d.id}`));
+    decks === undefined ? undefined : decks.filter((d) => !store.isPending(`deck:${d.id}`));
 
   return (
     <section className="space-y-4">

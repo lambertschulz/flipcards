@@ -4,6 +4,7 @@ import { createCardInDb } from "@/db/cards";
 import { db } from "@/db/database";
 import { createDeckInDb } from "@/db/decks";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
+import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { __resetPendingDeletesForTests, getPendingDeletes } from "@/lib/pending-deletes";
 import {
@@ -274,5 +275,155 @@ describe("Deck delete via deck-settings-page (ADR-0014)", () => {
 
     // No toast was rendered for this deck → no pending op.
     expect(getPendingDeletes().list()).toHaveLength(0);
+  });
+});
+
+// --- Optimistic-hide must persist through the `committing` window ----------
+//
+// Regression: the deck-list-page and deck-detail-page filters used to check
+// only `op.state === "pending"`, which let the row flash back into view
+// during the in-flight commit (between `pending` and `committed`). Both pages
+// now defer to `store.isPending(key)`, which covers both `pending` and
+// `committing`. These tests pin that behaviour.
+
+async function setupDeckListRouter() {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <Outlet />
+        <PendingDeleteToasts />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: DeckListPage,
+  });
+  const deckRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/deck/$deckId",
+    component: () => <div>deck</div>,
+  });
+  const deckNewRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/deck/new",
+    component: () => <div>new deck</div>,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, deckRoute, deckNewRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  await router.load();
+  return router;
+}
+
+describe("Optimistic-hide persists through `committing` (deck-list + deck-detail)", () => {
+  beforeEach(async () => {
+    await db.open();
+    __resetPendingDeletesForTests();
+  });
+
+  afterEach(async () => {
+    await db.cards.clear();
+    await db.decks.clear();
+    await db.reviewStates.clear();
+    __resetPendingDeletesForTests();
+  });
+
+  it("deck-list: row stays hidden while the delete commit is in flight", async () => {
+    const deck = await createDeckInDb({ name: "Anatomie" });
+
+    const router = await setupDeckListRouter();
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText("Anatomie");
+
+    // Enqueue a delete with a deferred commit so we can observe the
+    // `committing` window. We bypass the settings-page modal here because
+    // this test is about the deck-LIST filter, not the modal flow — the
+    // commit semantics are identical regardless of who enqueued the op.
+    const store = getPendingDeletes();
+    let resolveCommit: (() => void) | undefined;
+    const commitGate = new Promise<void>((r) => {
+      resolveCommit = r;
+    });
+    act(() => {
+      store.enqueue({
+        key: `deck:${deck.id}`,
+        label: "Deck gelöscht",
+        commit: () => commitGate,
+        restore: async () => {},
+      });
+    });
+
+    // Pending state → row hidden.
+    await waitFor(() => expect(screen.queryByText("Anatomie")).toBeNull());
+
+    // Drive into `committing` without resolving the commit. `flush(id)`
+    // transitions the op to `committing` and then awaits `commit()`.
+    const opId = store.list()[0].id;
+    let flushDone = false;
+    void store.flush(opId).then(() => {
+      flushDone = true;
+    });
+    await waitFor(() => {
+      expect(store.list().find((o) => o.id === opId)?.state).toBe("committing");
+    });
+    expect(flushDone).toBe(false);
+
+    // Row MUST stay hidden while committing — the regression was that the
+    // filter only excluded `pending`, so the row briefly resurrected here.
+    expect(screen.queryByText("Anatomie")).toBeNull();
+
+    // Let the commit finish so the test doesn't leak a hanging promise.
+    resolveCommit?.();
+    await act(async () => {
+      await commitGate;
+    });
+  });
+
+  it("deck-detail: card row stays hidden while the delete commit is in flight", async () => {
+    const deck = await createDeckInDb({ name: "Latein" });
+    const card = await createCardInDb({ deckId: deck.id, front: "Card-Committing", back: "x" });
+
+    const router = await setupCardDeleteRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText("Card-Committing");
+
+    const store = getPendingDeletes();
+    let resolveCommit: (() => void) | undefined;
+    const commitGate = new Promise<void>((r) => {
+      resolveCommit = r;
+    });
+    act(() => {
+      store.enqueue({
+        key: `card:${card.id}`,
+        label: "Card gelöscht",
+        commit: () => commitGate,
+        restore: async () => {},
+      });
+    });
+
+    await waitFor(() => expect(screen.queryByText("Card-Committing")).toBeNull());
+
+    const opId = store.list()[0].id;
+    let flushDone = false;
+    void store.flush(opId).then(() => {
+      flushDone = true;
+    });
+    await waitFor(() => {
+      expect(store.list().find((o) => o.id === opId)?.state).toBe("committing");
+    });
+    expect(flushDone).toBe(false);
+
+    // Row stays hidden through the committing window.
+    expect(screen.queryByText("Card-Committing")).toBeNull();
+
+    resolveCommit?.();
+    await act(async () => {
+      await commitGate;
+    });
   });
 });

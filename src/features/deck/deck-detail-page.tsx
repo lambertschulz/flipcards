@@ -18,10 +18,12 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
     [deckId],
     undefined,
   );
-  const pending = usePendingDeletes();
-  const pendingCardKeys = new Set(
-    pending.filter((o) => o.state === "pending" && o.key.startsWith("card:")).map((o) => o.key),
-  );
+  // Subscribe so this component re-renders whenever the pending-deletes store
+  // changes. The actual hide predicate is `store.isPending(key)`, which
+  // already covers both `pending` and `committing` — keeping the row hidden
+  // through the in-flight commit window so it can't briefly flash back in.
+  usePendingDeletes();
+  const store = getPendingDeletes();
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
@@ -39,7 +41,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
 
   // Optimistic hide: filter out cards that have a pending-delete op.
   const visibleCards =
-    cards === undefined ? undefined : cards.filter((c) => !pendingCardKeys.has(`card:${c.id}`));
+    cards === undefined ? undefined : cards.filter((c) => !store.isPending(`card:${c.id}`));
 
   return (
     <section className="space-y-4">
