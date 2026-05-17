@@ -1,11 +1,19 @@
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
+import { usePendingDeletes } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 
 export function DeckListPage() {
   const decks = useLiveQuery(() => db.decks.orderBy("name").toArray(), [], undefined);
+  const pending = usePendingDeletes();
+  const pendingDeckKeys = new Set(
+    pending.filter((o) => o.state === "pending" && o.key.startsWith("deck:")).map((o) => o.key),
+  );
+
+  const visibleDecks =
+    decks === undefined ? undefined : decks.filter((d) => !pendingDeckKeys.has(`deck:${d.id}`));
 
   return (
     <section className="space-y-4">
@@ -17,9 +25,9 @@ export function DeckListPage() {
         </Link>
       </div>
 
-      {decks === undefined ? (
+      {visibleDecks === undefined ? (
         <p className="text-sm text-slate-500">Lade Decks…</p>
-      ) : decks.length === 0 ? (
+      ) : visibleDecks.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
           <p className="mb-3 text-slate-600 dark:text-slate-400">Noch keine Decks angelegt.</p>
           <Link to="/deck/new">
@@ -28,7 +36,7 @@ export function DeckListPage() {
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-          {decks.map((deck) => (
+          {visibleDecks.map((deck) => (
             <li key={deck.id}>
               <Link
                 to="/deck/$deckId"

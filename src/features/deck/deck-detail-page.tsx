@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button";
-import { deleteCard } from "@/db/cards";
 import { db } from "@/db/database";
+import { deleteCardWithCascade, restoreDeletedCard } from "@/db/deletion";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import { usePendingDeletes } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 
@@ -16,6 +18,10 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
     [deckId],
     undefined,
   );
+  const pending = usePendingDeletes();
+  const pendingCardKeys = new Set(
+    pending.filter((o) => o.state === "pending" && o.key.startsWith("card:")).map((o) => o.key),
+  );
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
@@ -30,6 +36,10 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
       </section>
     );
   }
+
+  // Optimistic hide: filter out cards that have a pending-delete op.
+  const visibleCards =
+    cards === undefined ? undefined : cards.filter((c) => !pendingCardKeys.has(`card:${c.id}`));
 
   return (
     <section className="space-y-4">
@@ -63,9 +73,9 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
         </Link>
       </div>
 
-      {cards === undefined ? (
+      {visibleCards === undefined ? (
         <p className="text-sm text-slate-500">Lade Cards…</p>
-      ) : cards.length === 0 ? (
+      ) : visibleCards.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
           <p className="mb-3 text-slate-600 dark:text-slate-400">Noch keine Cards angelegt.</p>
           <Link to="/deck/$deckId/card/new" params={{ deckId: deck.id }}>
@@ -74,7 +84,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
         </div>
       ) : (
         <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-          {cards.map((card) => (
+          {visibleCards.map((card) => (
             <li
               key={card.id}
               className="flex items-center justify-between gap-2 px-3 py-2 min-h-[44px]"
@@ -90,8 +100,20 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={async () => {
-                  if (confirm("Card endgültig löschen?")) await deleteCard(card.id);
+                onClick={() => {
+                  // ADR-0014: Card-Delete läuft ohne Modal — nur Undo-Toast.
+                  const store = getPendingDeletes();
+                  let snapshot: Awaited<ReturnType<typeof deleteCardWithCascade>> | null = null;
+                  store.enqueue({
+                    key: `card:${card.id}`,
+                    label: "Card gelöscht",
+                    commit: async () => {
+                      snapshot = await deleteCardWithCascade(card.id);
+                    },
+                    restore: async () => {
+                      if (snapshot) await restoreDeletedCard(snapshot);
+                    },
+                  });
                 }}
                 aria-label="Card löschen"
               >

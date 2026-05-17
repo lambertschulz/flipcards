@@ -1,3 +1,4 @@
+import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
 import { DeckCreatePage } from "@/features/deck/deck-create-page";
@@ -30,6 +31,7 @@ const rootRoute = createRootRoute({
       <main>
         <Outlet />
       </main>
+      <PendingDeleteToasts />
     </div>
   ),
 });
