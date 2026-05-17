@@ -5,6 +5,8 @@ import { DeckDetailPage } from "@/features/deck/deck-detail-page";
 import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
+import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
+import { TagSessionReviewPage } from "@/features/tag-session/tag-session-review-page";
 import { Link, Outlet, createRootRoute, createRoute } from "@tanstack/react-router";
 
 const rootRoute = createRootRoute({
@@ -16,7 +18,10 @@ const rootRoute = createRootRoute({
             Flipcards
           </Link>
         </h1>
-        <nav className="text-sm">
+        <nav className="flex items-center gap-4 text-sm">
+          <Link to="/tag-session" className="underline underline-offset-4 hover:opacity-80">
+            Nach Tag lernen
+          </Link>
           <Link to="/about" className="underline underline-offset-4 hover:opacity-80">
             About
           </Link>
@@ -86,6 +91,33 @@ const cardEditRoute = createRoute({
   },
 });
 
+const tagSessionPickerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tag-session",
+  component: TagPickerPage,
+});
+
+// Tag-Session-Review consumes the picker's selection via the `tags` search
+// param (comma-joined). We deliberately keep it in the URL — that makes the
+// session deep-linkable and survives a hard refresh during review. The
+// validator coerces the raw search-value into a clean string.
+const tagSessionReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tag-session/review",
+  validateSearch: (search: Record<string, unknown>): { tags: string } => {
+    const raw = search.tags;
+    return { tags: typeof raw === "string" ? raw : "" };
+  },
+  component: function TagSessionReviewRouteComponent() {
+    const { tags } = tagSessionReviewRoute.useSearch();
+    const parsed = tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    return <TagSessionReviewPage tags={parsed} />;
+  },
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -114,5 +146,7 @@ export const routeTree = rootRoute.addChildren([
   cardCreateRoute,
   cardEditRoute,
   reviewSessionRoute,
+  tagSessionPickerRoute,
+  tagSessionReviewRoute,
   aboutRoute,
 ]);

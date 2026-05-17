@@ -14,10 +14,7 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
     [navigate, deckId],
   );
 
-  const loadDueCards = useCallback(
-    () => listDueCardsInDeck(deckId, Date.now()),
-    [deckId],
-  );
+  const loadDueCards = useCallback(() => listDueCardsInDeck(deckId, Date.now()), [deckId]);
 
   if (deck === null) return <p className="text-sm text-slate-500">Lade Deck…</p>;
   if (deck === undefined) {

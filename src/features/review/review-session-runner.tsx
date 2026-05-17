@@ -13,7 +13,7 @@ import {
 } from "@/domain/session";
 import { type Rating, type ReviewState, scheduleNext } from "@/domain/sm2";
 import { CardEditModal } from "@/features/review/card-edit-modal";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 type Phase =
   | { kind: "choose" }
