@@ -5,6 +5,10 @@ function toRow(deck: Deck): DeckRow {
   const row: DeckRow = { id: deck.id, name: deck.name };
   if (deck.description !== undefined) row.description = deck.description;
   if (deck.deckSetId !== undefined) row.deckSetId = deck.deckSetId;
+  // Preserve ADR-0010 Curated-Deck provenance across rename / metadata
+  // edits so a future "Update verfügbar" UX still recognises the deck.
+  if (deck.curatedSourceId !== undefined) row.curatedSourceId = deck.curatedSourceId;
+  if (deck.contentVersion !== undefined) row.contentVersion = deck.contentVersion;
   return row;
 }
 
@@ -12,6 +16,8 @@ function fromRow(row: DeckRow): Deck {
   const deck: Deck = { id: row.id, name: row.name };
   if (row.description !== undefined) deck.description = row.description;
   if (row.deckSetId !== undefined) deck.deckSetId = row.deckSetId;
+  if (row.curatedSourceId !== undefined) deck.curatedSourceId = row.curatedSourceId;
+  if (row.contentVersion !== undefined) deck.contentVersion = row.contentVersion;
   return deck;
 }
 

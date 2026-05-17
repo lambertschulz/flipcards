@@ -178,6 +178,56 @@ describe("CuratedDetailPage", () => {
     expect(await db.cards.count()).toBe(1);
   });
 
+  it("persists ADR-0010 provenance (curatedSourceId + contentVersion) on the imported Deck row", async () => {
+    // Regression for: curated imports must carry `curatedSourceId` and
+    // `contentVersion` (the schema's term for the manifest's `version`)
+    // through to IndexedDB so a future update-detection UX can compare what
+    // the bundle ships against what the user already has imported. Without
+    // these fields stored, the curated deck is indistinguishable from a
+    // hand-built one on the disk side.
+    fetchMock
+      .mockResolvedValueOnce(makeResponse(JSON.stringify(manifestWithOneDeckEntry)))
+      .mockResolvedValueOnce(makeResponse(stringifySharedDeck(sampleSharedDeck)));
+
+    const router = await setupRouter("french");
+    render(<RouterProvider router={router} />);
+
+    const button = await screen.findByTestId("curated-import-button");
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("curated-import-success")).toBeInTheDocument();
+    });
+
+    const row = await db.decks.get("deck-curated1");
+    expect(row?.curatedSourceId).toBe("fr");
+    expect(row?.contentVersion).toBe(3);
+  });
+
+  it("persists ADR-0010 provenance on each Deck row created from a SharedDeckSet import", async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeResponse(JSON.stringify(manifestWithOneSetEntry)))
+      .mockResolvedValueOnce(makeResponse(stringifySharedDeckSet(sampleSharedDeckSet)));
+
+    const router = await setupRouter("medicine");
+    render(<RouterProvider router={router} />);
+
+    const button = await screen.findByTestId("curated-import-button");
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("curated-import-success")).toBeInTheDocument();
+    });
+
+    const memberRow = await db.decks.get("deck-curated2");
+    expect(memberRow?.curatedSourceId).toBe("med");
+    expect(memberRow?.contentVersion).toBe(1);
+  });
+
   it("imports a SharedDeckSet payload via the deck-set apply pipeline", async () => {
     fetchMock
       .mockResolvedValueOnce(makeResponse(JSON.stringify(manifestWithOneSetEntry)))
@@ -200,7 +250,7 @@ describe("CuratedDetailPage", () => {
     expect(await db.cards.count()).toBe(1);
   });
 
-  it("shows an import-error banner when the payload payload is malformed", async () => {
+  it("shows an import-error banner when the payload is malformed", async () => {
     fetchMock
       .mockResolvedValueOnce(makeResponse(JSON.stringify(manifestWithOneDeckEntry)))
       .mockResolvedValueOnce(makeResponse("{ broken"));

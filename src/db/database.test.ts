@@ -35,7 +35,7 @@ describe("FlipcardsDatabase", () => {
     instance = new FlipcardsDatabase();
     await instance.open();
 
-    expect(instance.verno).toBe(4);
+    expect(instance.verno).toBe(5);
     expect(instance.tables.map((t) => t.name).sort()).toEqual([
       "cards",
       "deckSets",
@@ -76,11 +76,12 @@ describe("FlipcardsDatabase", () => {
     v1.close();
 
     // Step 2 — re-open under the production schema. Dexie should run the real
-    // v1→v2, v2→v3, and v3→v4 upgrade callbacks (defined in `database.ts`).
+    // v1→v2, v2→v3, v3→v4, and v4→v5 upgrade callbacks (defined in
+    // `database.ts`).
     const upgraded = new MigrationFixtureDatabase(dbName);
     await upgraded.open();
 
-    expect(upgraded.verno).toBe(4);
+    expect(upgraded.verno).toBe(5);
 
     const card = await upgraded.cards.get("card-legacy");
     expect(card?.tags).toEqual([]);

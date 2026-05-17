@@ -215,6 +215,15 @@ async function applyOneDeck(
     deckSetId: importedSetId,
   };
   if (entry.description !== undefined) deckRow.description = entry.description;
+  // ADR-0010 — Curated-Deck provenance. Optional on the SharedDeck entry
+  // schema; only present when the importer threads the manifest fields into
+  // the payload (e.g. `applyCuratedImport` in curated-detail-page).
+  if (entry.curatedSourceId !== undefined) {
+    deckRow.curatedSourceId = entry.curatedSourceId;
+  }
+  if (entry.contentVersion !== undefined) {
+    deckRow.contentVersion = entry.contentVersion;
+  }
   await db.decks.add(deckRow);
   localDecks.push({ id: deckRow.id, name: deckRow.name });
 

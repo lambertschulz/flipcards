@@ -10,6 +10,19 @@ export interface DeckRow {
   name: string;
   description?: string;
   deckSetId?: string;
+  // Provenance fields for decks imported from the Curated-Decks bundle
+  // (ADR-0010). `curatedSourceId` is the stable cross-version identifier
+  // assigned by the curator; `contentVersion` is the monotonically
+  // increasing release counter. Together they let a future "Update
+  // verfügbar" UX detect that a re-imported bundle entry is newer than the
+  // one already in IndexedDB without re-fetching the payload.
+  //
+  // Both are optional: decks the user created locally or imported from a
+  // peer-shared file have neither. v1 does not surface these fields in the
+  // UI; they exist so the migration path to ADR-0010's update-detection
+  // story is non-breaking.
+  curatedSourceId?: string;
+  contentVersion?: number;
 }
 
 export interface DeckSetRow {
@@ -109,6 +122,15 @@ export class FlipcardsDatabase extends Dexie {
     // migrations have a clean predecessor to upgrade from.
     this.version(4).stores({
       deckSets: "id, name",
+    });
+
+    // v5 — decks gain optional provenance fields `curatedSourceId` and
+    // `contentVersion` for Curated-Deck imports (issue #24, ADR-0010). Both
+    // are unindexed and optional — no `stores()` change needed. Pre-v5 rows
+    // simply lack the fields, which is valid for the row type and a no-op
+    // upgrade path.
+    this.version(5).stores({
+      decks: "id, deckSetId, name",
     });
   }
 }

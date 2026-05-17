@@ -6,6 +6,13 @@ export type Deck = {
   name: string;
   description?: string;
   deckSetId?: string;
+  // Provenance for decks originating from a Curated-Deck bundle entry
+  // (ADR-0010). Optional — only present on decks that were imported through
+  // the Curated-Library flow. v1 does not surface these in the UI; they
+  // exist so a future "Update verfügbar" UX can detect that a new bundle
+  // version is available without a separate schema migration.
+  curatedSourceId?: string;
+  contentVersion?: number;
 };
 
 export class InvalidDeckNameError extends Error {

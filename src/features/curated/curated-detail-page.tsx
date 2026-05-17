@@ -83,10 +83,42 @@ export function CuratedDetailPage({ slug }: { slug: string }) {
       return;
     }
     if (result.value.kind === "deck") {
-      const summary = await applySharedDeckImport(result.value.payload);
+      // ADR-0010 provenance. The SharedDeck schema already carries optional
+      // `curatedSourceId` + `contentVersion` slots; the manifest knows the
+      // curator-assigned values for the entry, so we stamp them onto the
+      // payload before handing it to the generic apply pipeline. This is the
+      // less intrusive of the two threading options (mutate-payload vs add
+      // a curated-only param to the apply API) — the schema fields exist
+      // precisely so curated imports can ride the same pipeline.
+      const payload: typeof result.value.payload = {
+        ...result.value.payload,
+        deck: {
+          ...result.value.payload.deck,
+          curatedSourceId: entry.curatedSourceId,
+          contentVersion: entry.version,
+        },
+      };
+      const summary = await applySharedDeckImport(payload);
       setState({ kind: "import-done", entry, summary: { kind: "deck", data: summary } });
     } else {
-      const summary = await applySharedDeckSetImport(result.value.payload);
+      // For a SharedDeckSet, the manifest's `curatedSourceId` + `version`
+      // describe the SET, not individual member decks. Each contained deck
+      // entry carries its own optional provenance — leave those alone and
+      // only set the set-level provenance on the wrapper's deck entries if
+      // they were authored to carry it. v1 doesn't model set-level
+      // provenance on the DeckSetRow (no schema field), so we stamp each
+      // contained deck entry with the set's curator id + version so the
+      // resulting Deck rows in IndexedDB are still distinguishable as
+      // curated. Per-entry values from the payload, if present, win.
+      const setPayload: typeof result.value.payload = {
+        ...result.value.payload,
+        decks: result.value.payload.decks.map((d) => ({
+          ...d,
+          curatedSourceId: d.curatedSourceId ?? entry.curatedSourceId,
+          contentVersion: d.contentVersion ?? entry.version,
+        })),
+      };
+      const summary = await applySharedDeckSetImport(setPayload);
       setState({ kind: "import-done", entry, summary: { kind: "deck-set", data: summary } });
     }
   };
