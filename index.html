@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f172a" />
+    <!-- iOS does not read the web-app manifest for home-screen icons.
+         Point at the same 192-px asset; iOS will pick it up via this link. -->
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
     <title>Flipcards</title>
   </head>
   <body class="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-50">
