@@ -7,7 +7,7 @@
 // Mirror of the shared-deck migration table on purpose; the two pipelines
 // evolve independently but the shape stays familiar.
 
-import { CURRENT_BACKUP_FORMAT_VERSION } from "./schema";
+import { BACKUP_FORMAT, CURRENT_BACKUP_FORMAT_VERSION } from "./schema";
 
 type Migration = (input: unknown) => unknown;
 
@@ -16,13 +16,11 @@ const backupMigrations: Record<number, Migration> = {};
 export class NoMigrationError extends Error {
   readonly fromVersion: number;
   constructor(fromVersion: number) {
-    super(`No migration available from ${BACKUP_FORMAT_LABEL} formatVersion ${fromVersion}`);
+    super(`No migration available from ${BACKUP_FORMAT} formatVersion ${fromVersion}`);
     this.name = "NoMigrationError";
     this.fromVersion = fromVersion;
   }
 }
-
-const BACKUP_FORMAT_LABEL = "flipcards.backup";
 
 export function migrateBackup(parsed: unknown, fromVersion: number): unknown {
   let current: unknown = parsed;
