@@ -364,6 +364,64 @@ describe("DeckDetailPage filter bar (issue #10)", () => {
     });
   });
 
+  it("does not re-subscribe the reviewStates query on unrelated React renders", async () => {
+    // Regression for PR #43 review feedback (codex): `useVisibleCards`
+    // returned a freshly-`.filter()`-ed array on every render, so the
+    // downstream `useLiveQuery(..., [cards])` for reviewStates tore down
+    // and re-subscribed on every render — a render/query loop on every
+    // Deck-Detail page with cards. The hook now memoises its filtered
+    // output, so re-subscribes happen only when the underlying Dexie
+    // rows or the pending-deletes store snapshot actually change.
+    //
+    // We assert this by counting calls to `db.reviewStates.where` while
+    // triggering React renders that don't touch Dexie: typing into the
+    // page-local search input. The query thunk
+    // (`db.reviewStates.where("cardId").anyOf(...).toArray()`) calls
+    // `.where()` each time it runs, so the spy captures every re-run.
+    const deck = await createDeckInDb({ name: "D" });
+    await createCardInDb({ deckId: deck.id, front: "Bonjour", back: "Hi" });
+    await createCardInDb({ deckId: deck.id, front: "Hallo", back: "Hello" });
+
+    const whereSpy = vi.spyOn(db.reviewStates, "where");
+
+    const router = await setupRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    // Wait for the initial load — query should have run at least once.
+    await screen.findByLabelText(/Cards durchsuchen/i);
+    await waitFor(() => {
+      expect(whereSpy).toHaveBeenCalled();
+    });
+
+    // Record the call count after the initial subscribe/run settles.
+    // Allow a brief tick for any in-flight live-query notifications.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const baselineCalls = whereSpy.mock.calls.length;
+
+    // Trigger several React renders by typing into the search input.
+    // The page-local filter state changes (parent re-renders), but the
+    // underlying Dexie cards query is unaffected — and so reviewStates
+    // must not re-subscribe.
+    const input = screen.getByLabelText(/Cards durchsuchen/i);
+    await typeInto(input, "B");
+    await typeInto(input, "Bo");
+    await typeInto(input, "Bon");
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // If `cards` were unstable, every keystroke would tear down + re-run
+    // the reviewStates query. With the stable memo we expect zero new
+    // calls. (We tolerate the baseline initial-load duplicates that
+    // dexie-react-hooks itself may produce.)
+    expect(whereSpy.mock.calls.length).toBe(baselineCalls);
+
+    whereSpy.mockRestore();
+  });
+
   it("keeps a selected tag chip visible (and toggle-off-able) when its prefiltered count drops to 0", async () => {
     // Regression for PR #43 round-3 review feedback: when a user selects a
     // tag and then a search/status filter prefilters that tag out of
