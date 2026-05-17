@@ -48,19 +48,29 @@ export async function collectBackup(clock: CollectClock = defaultClock): Promise
     if (!deckIdSet.has(orphanDeckId)) cardsByDeck.delete(orphanDeckId);
   }
 
-  const decks = deckRows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    ...(row.description !== undefined ? { description: row.description } : {}),
-    ...(row.deckSetId !== undefined ? { deckSetId: row.deckSetId } : {}),
-    cards: cardsByDeck.get(row.id) ?? [],
-  }));
-
   const deckSets = deckSetRows.map((row) => ({
     id: row.id,
     name: row.name,
     ...(row.description !== undefined ? { description: row.description } : {}),
   }));
+
+  // Drop any `deckSetId` whose target row isn't in the exported `deckSets`.
+  // The home page tolerates a deck pointing at a missing Deck-Set (treats it
+  // as lose), but the backup schema's `decks.deckSetId must reference…`
+  // refine would reject such a file on re-import. Round-trip must work for
+  // any locally tolerated state, so we silently sanitise the orphan to lose.
+  const deckSetIdSet = new Set(deckSetRows.map((s) => s.id));
+  const decks = deckRows.map((row) => {
+    const deckSetId =
+      row.deckSetId !== undefined && deckSetIdSet.has(row.deckSetId) ? row.deckSetId : undefined;
+    return {
+      id: row.id,
+      name: row.name,
+      ...(row.description !== undefined ? { description: row.description } : {}),
+      ...(deckSetId !== undefined ? { deckSetId } : {}),
+      cards: cardsByDeck.get(row.id) ?? [],
+    };
+  });
 
   // Filter review-states and review-logs whose cardId no longer exists in
   // any deck. Same defensive rationale as orphan cards above — the schema

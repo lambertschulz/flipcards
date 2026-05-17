@@ -113,6 +113,26 @@ describe("parseBackup — happy path", () => {
     expect(parsed.reviews).toEqual([sampleReviewLog, extra]);
   });
 
+  it("round-trips deck and deck-set names well over 200 chars", () => {
+    // The domain/UI doesn't cap name length, so a locally valid long name must
+    // survive a backup round-trip. Regression for codex review on PR #50: the
+    // schema previously rejected names > 200 chars, which broke round-trip for
+    // users who'd legally created a long-named deck.
+    const longName = "ä".repeat(500);
+    const longDescription = "x".repeat(2000);
+    const original = exportBackup({
+      decks: [{ ...sampleDeck, name: longName, description: longDescription }],
+      deckSets: [{ ...sampleDeckSet, name: longName }],
+      reviewStates: [sampleReviewState],
+      reviews: [sampleReviewLog],
+      now: () => new Date("2026-05-17T08:00:00Z"),
+      appVersion: "0.1.0",
+    });
+    const parsed = expectOk(parseBackup(stringifyBackup(original)));
+    expect(parsed.decks[0].name).toBe(longName);
+    expect(parsed.deckSets[0].name).toBe(longName);
+  });
+
   it("accepts an empty backup (no decks, no review data)", () => {
     const empty = exportBackup({
       decks: [],

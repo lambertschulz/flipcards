@@ -21,19 +21,19 @@ export const CURRENT_BACKUP_FORMAT_VERSION = 1;
 export const BACKUP_FORMAT = "flipcards.backup";
 
 const ID_REGEX = /^[A-Za-z0-9_-]{8,}$/;
-const MAX_NAME_LENGTH = 200;
 
 const idSchema = z.string().regex(ID_REGEX, "id must match /^[A-Za-z0-9_-]{8,}$/");
 
-// 1..200 chars after trim. We don't normalize — the raw value round-trips so
+// Non-empty after trim. We don't normalize — the raw value round-trips so
 // Export → Reset → Import reproduces the exact prior state (ticket AC).
-const nameSchema = z.string().refine(
-  (raw) => {
-    const trimmed = raw.trim();
-    return trimmed.length >= 1 && trimmed.length <= MAX_NAME_LENGTH;
-  },
-  { message: `name must be 1..${MAX_NAME_LENGTH} characters after trim` },
-);
+//
+// No upper-bound length cap: the domain/UI elsewhere doesn't enforce one, so a
+// locally valid deck name (however long) must survive a round-trip. Backup is
+// a faithful snapshot, not an enforcement gate. If the domain ever adopts a
+// cap, it belongs in the domain validators — not here.
+const nameSchema = z.string().refine((raw) => raw.trim().length >= 1, {
+  message: "name must be non-empty after trim",
+});
 
 const BackupDeckSchema = z.object({
   id: idSchema,

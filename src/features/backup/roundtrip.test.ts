@@ -111,4 +111,27 @@ describe("Backup round-trip (issue #21 headline AC)", () => {
     expect(sortById(after.reviewStates)).toEqual(sortById(before.reviewStates));
     expect(sortById(after.reviews)).toEqual(sortById(before.reviews));
   });
+
+  it("sanitises orphan deckSetId during export (codex review PR #50)", async () => {
+    // The home page tolerates a deck pointing at a missing Deck-Set (treats
+    // it as lose). Before this fix, `collectBackup` preserved the stale id
+    // while the exported `deckSets` array lacked the referenced row, so
+    // `parseBackup`'s "decks.deckSetId must reference…" refine rejected the
+    // file — users with this tolerated DB state couldn't restore their own
+    // backup. The fix in `collect.ts` silently drops the orphan reference
+    // (deck becomes lose), so the round-trip succeeds.
+    await db.decks.add({
+      id: "deck-orphan1",
+      name: "Lost in space",
+      deckSetId: "set-ghostzzz", // no matching row in deckSets table
+    });
+
+    const file = await collectBackup(fixedClock);
+    expect(file.decks[0].deckSetId).toBeUndefined();
+
+    const json = stringifyBackup(file);
+    const parseResult = parseBackup(json);
+    if (!parseResult.ok) throw new Error(`parse failed: ${JSON.stringify(parseResult.error)}`);
+    expect(parseResult.value.decks[0].deckSetId).toBeUndefined();
+  });
 });
