@@ -41,6 +41,7 @@
 
 import { type CardRow, type DeckRow, type DeckSetRow, db } from "@/db/database";
 import type { SharedDeckEntry, SharedDeckSet } from "@/domain/shared-deck";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 
 export type DeckApplyMode = "merged" | "renamed" | "new";
 
@@ -74,6 +75,21 @@ export type ApplySetSummary = {
 };
 
 export async function applySharedDeckSetImport(file: SharedDeckSet): Promise<ApplySetSummary> {
+  // ADR-0014 — additive import path. Same rationale as the single-deck
+  // shared-import: `flushAll()` (commit pending deletes), NOT `cancelAll()`
+  // (discard them). Backup-Restore uses `cancelAll()` because it
+  // bulk-replaces the entire DB and committing a stale pending delete first
+  // would just delete a row the replace is about to write back. A
+  // shared-deck-set import is additive — it never clobbers existing rows
+  // (local always wins per ADR-0011) — so committing the user's pending
+  // deletes first is the right move: it honours the delete intent and gives
+  // the global card-ID scan below a consistent post-delete snapshot.
+  //
+  // Must run BEFORE the rw-transaction opens because the coordinator's
+  // commit thunks own their own Dexie writes and cannot be nested inside
+  // our `rw` transaction.
+  await getPendingDeletes().flushAll();
+
   return await db.transaction(
     "rw",
     [db.deckSets, db.decks, db.cards, db.reviewStates, db.reviews],

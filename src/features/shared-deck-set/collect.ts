@@ -4,9 +4,14 @@
 // Sits between the DB layer (`src/db/*`) and the pure domain
 // (`src/domain/shared-deck`). Review-states are **never** read here —
 // CONTEXT.md (Shared Deck-Set) is explicit that a Shared Deck-Set carries
-// no learning progress. The four involved tables (deckSets, decks, cards
+// no learning progress. The three involved tables (deckSets, decks, cards
 // — review-states stay out) are read in a single Dexie read-only
 // transaction so the snapshot is consistent against a concurrent writer.
+//
+// Cards are fetched via the `deckId` index (`.where("deckId").anyOf(...)`),
+// not via a table-wide `.filter(...)` scan. The local DB may contain large
+// unrelated decks (image payloads on cards), and a scan would load all
+// of them into memory just to drop them in JS.
 
 import { db } from "@/db/database";
 import {
@@ -39,13 +44,14 @@ export async function collectSharedDeckSet(
     async () => {
       const set = await db.deckSets.get(deckSetId);
       const decks = await db.decks.where("deckSetId").equals(deckSetId).toArray();
-      // Pull every card whose deck belongs to this set. Doing the filter in
-      // JS (rather than `.anyOf` per deckId) keeps the transaction to a
-      // single table-wide read and avoids one round-trip per deck — the
-      // export path is one-shot and the cards table is the only large
-      // table that matters here.
-      const memberIds = new Set(decks.map((d) => d.id));
-      const cards = await db.cards.filter((c) => memberIds.has(c.deckId)).toArray();
+      // Pull only the cards whose deckId is in the member set. Using the
+      // `deckId` index via `anyOf(...)` (vs a table-wide `.filter(...)`
+      // scan) avoids loading every unrelated card — important when the
+      // local DB contains other large decks with embedded image payloads
+      // that the export must not pay for in memory.
+      const memberIds = decks.map((d) => d.id);
+      const cards =
+        memberIds.length === 0 ? [] : await db.cards.where("deckId").anyOf(memberIds).toArray();
       return [set, decks, cards] as const;
     },
   );
