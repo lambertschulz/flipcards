@@ -1,3 +1,4 @@
+import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
 import { DeckSetCreatePage } from "@/features/deck-set/deck-set-create-page";
@@ -167,6 +168,12 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const backupImportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/backup/import",
+  component: BackupImportPage,
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -201,5 +208,6 @@ export const routeTree = rootRoute.addChildren([
   tagSessionPickerRoute,
   tagSessionReviewRoute,
   settingsRoute,
+  backupImportRoute,
   aboutRoute,
 ]);

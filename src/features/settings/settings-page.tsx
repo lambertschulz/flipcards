@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { exportBackupToFile } from "@/features/backup/backup-export";
 import {
   type BackupReminderFrequency,
   type Language,
@@ -7,7 +8,7 @@ import {
   readSettings,
   writeSettings,
 } from "@/lib/settings/settings";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { wipeAllData } from "./wipe";
 
@@ -192,19 +193,36 @@ function StorageSection() {
       ) : (
         <StorageBar usage={state.usage} quota={state.quota} />
       )}
+      <BackupActions />
+    </SettingsBlock>
+  );
+}
+
+function BackupActions() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="flex flex-wrap gap-2">
       <Button
         type="button"
         variant="outline"
-        onClick={() => {
-          // The Backup-Export function (issue #?) isn't wired up yet.
-          // Per the brief, this button is a stub — we surface that to the
-          // user instead of pretending to work.
-          alert("Backup-Export ist noch nicht implementiert.");
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await exportBackupToFile();
+          } finally {
+            setBusy(false);
+          }
         }}
       >
-        Backup jetzt erstellen
+        {busy ? "Backup wird erstellt…" : "Backup jetzt erstellen"}
       </Button>
-    </SettingsBlock>
+      <Link to="/backup/import">
+        <Button type="button" variant="outline">
+          Backup importieren
+        </Button>
+      </Link>
+    </div>
   );
 }
 

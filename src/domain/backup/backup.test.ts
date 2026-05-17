@@ -247,10 +247,7 @@ describe("parseBackup — discriminated errors", () => {
     const shared = file.decks[0].cards[0];
     const broken: BackupFileV1 = {
       ...file,
-      decks: [
-        file.decks[0],
-        { id: "deck-bbbbbbbb", name: "Andere Sprache", cards: [shared] },
-      ],
+      decks: [file.decks[0], { id: "deck-bbbbbbbb", name: "Andere Sprache", cards: [shared] }],
     };
     const e = unwrapErr(parseBackup(JSON.stringify(broken)));
     expect(e.kind).toBe("SchemaError");

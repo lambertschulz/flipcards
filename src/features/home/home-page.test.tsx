@@ -53,6 +53,11 @@ async function setupRouter() {
     path: "/settings",
     component: () => <div>Settings</div>,
   });
+  const backupImportRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/backup/import",
+    component: () => <div>Backup-Import</div>,
+  });
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       homeRoute,
@@ -62,6 +67,7 @@ async function setupRouter() {
       deckSetNewRoute,
       tagSessionRoute,
       settingsRoute,
+      backupImportRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
