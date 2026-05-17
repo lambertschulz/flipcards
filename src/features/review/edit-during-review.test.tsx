@@ -155,6 +155,55 @@ describe("Edit-during-Review (issue #6)", () => {
     expect(state.repetitions).toBe(0);
   });
 
+  it("gates global review shortcuts (Space, 1-4) while the edit-modal is open", async () => {
+    const deck = await createDeckInDb({ name: "Shortcut-Gate" });
+    const card = await createCardInDb({
+      deckId: deck.id,
+      front: "Front",
+      back: "Back",
+    });
+
+    const router = await setupRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    await click(await screen.findByRole("button", { name: /Open-ended/i }));
+
+    // --- Front side, modal open: Space must NOT flip the card. ---
+    await click(await screen.findByRole("button", { name: /Card bearbeiten/i }));
+
+    // The front content is still displayed (modal is overlay, underlying
+    // review card is unchanged). Dispatch Space on document.body — this is
+    // what bubbles from a focused tab/button inside the modal.
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+    });
+
+    // No reviews logged, no schedule change — modal is still open.
+    expect(await db.reviews.count()).toBe(0);
+    expect((await getReviewState(card.id)).repetitions).toBe(0);
+
+    // Close the modal via the labelled "Schließen" button, reveal the back
+    // side normally, then re-open the modal and prove that pressing "1"
+    // does not rate the card.
+    await click(await screen.findByRole("button", { name: /Schließen/i }));
+
+    // Reveal the back via the visible "Vorderseite" affordance.
+    const front = await screen.findByRole("button", { name: /Vorderseite/i });
+    await click(front);
+
+    // Re-open the modal on the back side.
+    await click(await screen.findByRole("button", { name: /Card bearbeiten/i }));
+
+    // Press "1" — must NOT trigger the "again" rating while the modal is open.
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "1" });
+    });
+
+    // No review row written, no SM-2 mutation.
+    expect(await db.reviews.count()).toBe(0);
+    expect((await getReviewState(card.id)).repetitions).toBe(0);
+  });
+
   it("editing after rating preserves the already-written review-log row and SM-2 schedule", async () => {
     const deck = await createDeckInDb({ name: "Post-Rating-Edit" });
     const card = await createCardInDb({

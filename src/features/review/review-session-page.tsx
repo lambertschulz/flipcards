@@ -130,9 +130,14 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
     });
   }, []);
 
-  // Keyboard: Space flips the card; 1-4 rate the back side.
+  // Keyboard: Space flips the card; 1-4 rate the back side. While the
+  // edit-modal is open we short-circuit the handler so that keys bubbling
+  // out of the modal (e.g. 1-4 on a focused button, Space on a tab) cannot
+  // rate or flip the underlying session card — that would break the
+  // modal's no-session-mutation invariant (issue #6, codex review).
   useEffect(() => {
     if (phase.kind !== "reviewing") return;
+    if (editingCardId !== null) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (!phase.showBack && (e.code === "Space" || e.key === " ")) {
@@ -150,7 +155,7 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, flip, answer]);
+  }, [phase, flip, answer, editingCardId]);
 
   if (deck === null) return <p className="text-sm text-slate-500">Lade Deck…</p>;
   if (deck === undefined) {
