@@ -76,13 +76,27 @@ const SharedDeckEntrySchema = SharedDeckMetaSchema.extend({
   cards: cardsArraySchema,
 });
 
-export const SharedDeckSetSchema = z.object({
-  format: z.literal(SHARED_DECK_SET_FORMAT),
-  formatVersion: z.literal(CURRENT_SHARED_DECK_SET_FORMAT_VERSION),
-  exportedAt: z.string(),
-  deckSet: SharedDeckSetMetaSchema,
-  decks: z.array(SharedDeckEntrySchema),
-});
+export const SharedDeckSetSchema = z
+  .object({
+    format: z.literal(SHARED_DECK_SET_FORMAT),
+    formatVersion: z.literal(CURRENT_SHARED_DECK_SET_FORMAT_VERSION),
+    exportedAt: z.string(),
+    deckSet: SharedDeckSetMetaSchema,
+    decks: z.array(SharedDeckEntrySchema),
+  })
+  // Card ids are the primary key of the Dexie `cards` table; two decks in
+  // the same file carrying the same card id would, on import, see the
+  // second occurrence silently skipped by apply.ts's global dedup loop —
+  // a valid-looking file would lose content with no error. Enforce the
+  // invariant at the schema boundary so every callsite of parseSharedDeckSet
+  // gets the check for free. Mirrors the BackupFileV1 pattern.
+  .refine(
+    (set) => {
+      const allIds = set.decks.flatMap((deck) => deck.cards.map((card) => card.id));
+      return new Set(allIds).size === allIds.length;
+    },
+    { message: "card ids must be globally unique across the deck-set" },
+  );
 
 export type SharedCard = z.infer<typeof SharedCardSchema>;
 export type SharedDeckMeta = z.infer<typeof SharedDeckMetaSchema>;

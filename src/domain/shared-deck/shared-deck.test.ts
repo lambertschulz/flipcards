@@ -179,6 +179,21 @@ describe("Schema rules — one negative case per rule", () => {
     expect(unwrapErr(parseSharedDeck(json)).kind).toBe("SchemaError");
   });
 
+  it("rejects a SharedDeckSet whose two decks share a card id (globally unique)", () => {
+    const set = JSON.parse(JSON.stringify(sharedDeckSetFixture)) as SharedDeckSet;
+    // Force a collision: copy a card from deck 0 into deck 1 with the same id.
+    const stolen = JSON.parse(
+      JSON.stringify(set.decks[0].cards[0]),
+    ) as SharedDeckSet["decks"][number]["cards"][number];
+    set.decks[1].cards = [stolen, ...set.decks[1].cards];
+    const e = unwrapErr(parseSharedDeckSet(JSON.stringify(set)));
+    expect(e.kind).toBe("SchemaError");
+    if (e.kind === "SchemaError") {
+      const messages = e.issues.map((i) => i.message).join(" | ");
+      expect(messages).toContain("globally unique across the deck-set");
+    }
+  });
+
   it("accepts empty front and back (cloze-style notes are not blocked)", () => {
     const json = mutate(sharedDeckFixture as SharedDeck, (d) => {
       d.cards[0].front = "";
