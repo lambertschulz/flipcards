@@ -220,6 +220,21 @@ describe("deleteDeckSetWithCascade", () => {
     expect((await db.decks.get(d1.id))?.deckSetId).toBe("s1");
   });
 
+  it("preserves the deck-set's optional description through delete + restore", async () => {
+    // Regression: prior to this fix `DeletedDeckSetSnapshot.deckSet` captured
+    // only `{id, name}`, dropping the `description` field that DeckSetRow has
+    // carried since schema v4 (issue #19). On undo the row was put back
+    // without a description — silently losing data. ADR-0014 demands that
+    // "Undo stellt das Objekt vollständig wieder her".
+    await db.deckSets.put({ id: "s-desc", name: "Medizin", description: "Vorklinik" });
+    const snap = await deleteDeckSetWithCascade("s-desc");
+    expect(snap.deckSet.description).toBe("Vorklinik");
+
+    await restoreDeletedDeckSet(snap);
+    const restored = await db.deckSets.get("s-desc");
+    expect(restored?.description).toBe("Vorklinik");
+  });
+
   it("an empty deck-set stays empty after delete + restore (no auto-creation of phantom decks)", async () => {
     // ADR-0014: empty Deck-Sets bleiben bestehen (symmetrisch zu leeren Decks).
     await db.deckSets.put({ id: "s-empty", name: "Empty Set" });

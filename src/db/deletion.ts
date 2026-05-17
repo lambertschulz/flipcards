@@ -43,7 +43,12 @@ export type DeletedDeckSnapshot = {
 };
 
 export type DeletedDeckSetSnapshot = {
-  deckSet: { id: string; name: string };
+  // `description` is optional (schema v4, issue #19). Captured so undo can
+  // restore the row in full — without it, deleting a Deck-Set with a
+  // description and then hitting "Rückgängig" would silently strip the
+  // description, violating ADR-0014's "Undo stellt das Objekt vollständig
+  // wieder her".
+  deckSet: { id: string; name: string; description?: string };
   /** Decks that were detached from this set. We snapshot the previous deckSetId so undo can re-attach. */
   detachedDecks: { id: string; previousDeckSetId: string }[];
 };
@@ -188,7 +193,15 @@ async function executeDeckSetDeleteInTxn(plan: DeleteDeckSetPlan): Promise<Delet
   if (setRow) await db.deckSets.delete(plan.deckSetId);
 
   return {
-    deckSet: setRow ? { id: setRow.id, name: setRow.name } : { id: plan.deckSetId, name: "" },
+    deckSet: setRow
+      ? {
+          id: setRow.id,
+          name: setRow.name,
+          // Mirror how `executeDeckDeleteInTxn` carries the deck's optional
+          // `description` — snapshot it verbatim so undo can put it back.
+          ...(setRow.description !== undefined ? { description: setRow.description } : {}),
+        }
+      : { id: plan.deckSetId, name: "" },
     detachedDecks: detached,
   };
 }
@@ -233,7 +246,16 @@ export async function restoreDeletedDeck(snapshot: DeletedDeckSnapshot): Promise
 
 export async function restoreDeletedDeckSet(snapshot: DeletedDeckSetSnapshot): Promise<void> {
   await db.transaction("rw", db.deckSets, db.decks, async () => {
-    await db.deckSets.put({ id: snapshot.deckSet.id, name: snapshot.deckSet.name });
+    // Mirror `restoreDeletedDeck`: include the optional `description` only
+    // when it was captured, so undo restores the row in full (ADR-0014).
+    const setRow: { id: string; name: string; description?: string } = {
+      id: snapshot.deckSet.id,
+      name: snapshot.deckSet.name,
+    };
+    if (snapshot.deckSet.description !== undefined) {
+      setRow.description = snapshot.deckSet.description;
+    }
+    await db.deckSets.put(setRow);
     for (const entry of snapshot.detachedDecks) {
       const deckRow = await db.decks.get(entry.id);
       if (!deckRow) continue;
