@@ -25,7 +25,10 @@ async function setupRouter(deckId: string) {
     path: "/deck/$deckId",
     component: function DetailRouteComponent() {
       const { deckId: id } = detailRoute.useParams();
-      return <DeckDetailPage deckId={id} />;
+      // Mirror the production route (src/app/routes.tsx): key by deckId
+      // so navigating between two decks remounts the page and resets
+      // the page-local filter state.
+      return <DeckDetailPage key={id} deckId={id} />;
     },
   });
   const cardEditRoute = createRoute({
@@ -215,6 +218,46 @@ describe("DeckDetailPage filter bar (issue #10)", () => {
       expect(items).toHaveLength(1);
     });
     expect((screen.getByLabelText(/Cards durchsuchen/i) as HTMLInputElement).value).toBe("");
+  });
+
+  it("resets the filter bar when navigating to a different deck", async () => {
+    // Re-entering the deck-detail page must discard page-local filter
+    // state — otherwise the previous deck's query/tags/status leak into
+    // the new deck (see PR #43 review feedback for issue #10).
+    const deckA = await createDeckInDb({ name: "A" });
+    const deckB = await createDeckInDb({ name: "B" });
+    await createCardInDb({ deckId: deckA.id, front: "Frosch", back: "Frog", tags: ["fr"] });
+    await createCardInDb({ deckId: deckB.id, front: "Apfel", back: "Apple", tags: ["de"] });
+
+    const router = await setupRouter(deckA.id);
+    render(<RouterProvider router={router} />);
+
+    // Activate a query filter on deck A.
+    const inputA = (await screen.findByLabelText(/Cards durchsuchen/i)) as HTMLInputElement;
+    await typeInto(inputA, "Frosch");
+    // Activate a tag chip on deck A. After query="Frosch" the fr-chip count is 1.
+    await clickAndFlush(await screen.findByRole("button", { name: "fr 1" }));
+    // Activate a non-default status on deck A.
+    await clickAndFlush(await screen.findByRole("button", { name: /Nur Due/i }));
+
+    expect(inputA.value).toBe("Frosch");
+
+    // Navigate to deck B (same route component, different param).
+    await act(async () => {
+      await router.navigate({ to: "/deck/$deckId", params: { deckId: deckB.id } });
+    });
+
+    // The filter bar for deck B must be reset to defaults.
+    const inputB = (await screen.findByLabelText(/Cards durchsuchen/i)) as HTMLInputElement;
+    await waitFor(() => {
+      expect(inputB.value).toBe("");
+    });
+    // No tag chip pressed (the only chip rendered for deck B is "de 1").
+    const deChip = screen.getByRole("button", { name: "de 1" });
+    expect(deChip.getAttribute("aria-pressed")).toBe("false");
+    // Status back to default ("Alle").
+    const alleBtn = screen.getByRole("button", { name: /^Alle$/i });
+    expect(alleBtn.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("AND-combines query, tag, and status filters", async () => {
