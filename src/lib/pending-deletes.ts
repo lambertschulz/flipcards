@@ -138,6 +138,12 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
   // commit functions captured at enqueue-time; not part of the public op shape.
   const commits = new Map<string, () => Promise<void>>();
   const restores = new Map<string, () => Promise<void>>();
+  // In-flight commit promises, captured the moment an op enters `committing`.
+  // `flushAll()` awaits these alongside any still-`pending` ops it kicks off —
+  // otherwise a backup-export racing with the auto-commit timer would proceed
+  // to read IndexedDB while a delete transaction was still in flight (see
+  // `backup-export.ts` / `flushAll waits for committing ops too` test).
+  const commitPromises = new Map<string, Promise<void>>();
   const listeners = new Set<Listener>();
   let idCounter = 0;
 
@@ -156,6 +162,7 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     ops = ops.filter((op) => op.id !== id);
     commits.delete(id);
     restores.delete(id);
+    commitPromises.delete(id);
   }
 
   function clearTimer(id: string) {
@@ -166,15 +173,24 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     }
   }
 
-  async function commitOp(id: string): Promise<void> {
+  function commitOp(id: string): Promise<void> {
+    // Re-entrancy guard: if a commit for this id is already in flight, return
+    // the existing promise rather than starting a second one. This matters
+    // because `flushAll()` and the auto-commit timer can both call `commitOp`
+    // for the same id (e.g. user clicks "Backup exportieren" the instant the
+    // 10s timer fires); without this guard we'd transition out of `pending`
+    // once, then the second entry would see `op.state !== "pending"` and
+    // return `undefined` — losing the in-flight handle for `flushAll`'s await.
+    const existing = commitPromises.get(id);
+    if (existing) return existing;
     const op = ops.find((o) => o.id === id);
-    if (!op || op.state !== "pending") return;
+    if (!op || op.state !== "pending") return Promise.resolve();
     const commit = commits.get(id);
     clearTimer(id);
     if (!commit) {
       dropOp(id);
       publish();
-      return;
+      return Promise.resolve();
     }
     // Transition to `committing` BEFORE awaiting commit() so the UI hides
     // the undo affordance during the in-flight IDB transaction. If we left
@@ -184,19 +200,29 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     // in-flight commit still finishes and deletes the data.
     transition(id, { state: "committing" });
     publish();
-    try {
-      await commit();
-      transition(id, { state: "committed" });
-      // Drop committed ops from the visible list — the UI shouldn't show
-      // a stale toast for an op that's already final.
-      dropOp(id);
-      publish();
-    } catch (err) {
-      transition(id, { state: "failed", error: err instanceof Error ? err.message : String(err) });
-      const failed = ops.find((o) => o.id === id);
-      if (failed && options.onError) options.onError(failed, err);
-      publish();
-    }
+    const promise = (async () => {
+      try {
+        await commit();
+        transition(id, { state: "committed" });
+        // Drop committed ops from the visible list — the UI shouldn't show
+        // a stale toast for an op that's already final.
+        dropOp(id);
+        publish();
+      } catch (err) {
+        transition(id, {
+          state: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+        const failed = ops.find((o) => o.id === id);
+        if (failed && options.onError) options.onError(failed, err);
+        // Clear the in-flight handle so a future flushAll doesn't get the
+        // settled-failed promise back. The op stays in `failed` state.
+        commitPromises.delete(id);
+        publish();
+      }
+    })();
+    commitPromises.set(id, promise);
+    return promise;
   }
 
   return {
@@ -263,10 +289,26 @@ export function createPendingDeletesStore(options: CreateStoreOptions = {}): Pen
     },
 
     async flushAll() {
-      const pending = ops.filter((o) => o.state === "pending").map((o) => o.id);
-      // Kick off every commit in parallel; Dexie serialises rw transactions
-      // against the same tables internally, so this is safe.
-      await Promise.all(pending.map((id) => commitOp(id)));
+      // Kick off every still-pending op AND wait for every already-`committing`
+      // op to settle. The committing branch matters for callers like
+      // `exportBackupToFile()`: if the 10s auto-commit timer fires a moment
+      // before the user clicks "Backup exportieren", the op is in `committing`
+      // (commit() is awaiting Dexie) but no longer in `pending` — without
+      // joining its promise, flushAll would resolve while the delete
+      // transaction is still in flight and the backup would capture rows the
+      // user has already deleted. Dexie serialises rw transactions against
+      // the same tables internally, so kicking off the remaining pending ops
+      // in parallel is safe.
+      const promises: Promise<void>[] = [];
+      for (const op of ops) {
+        if (op.state === "pending") {
+          promises.push(commitOp(op.id));
+        } else if (op.state === "committing") {
+          const inFlight = commitPromises.get(op.id);
+          if (inFlight) promises.push(inFlight);
+        }
+      }
+      await Promise.all(promises);
     },
 
     list() {

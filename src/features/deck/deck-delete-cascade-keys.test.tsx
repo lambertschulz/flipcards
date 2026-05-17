@@ -506,3 +506,105 @@ describe("Cascade-key invariant — TagPickerPage reactivity", () => {
     });
   });
 });
+
+// --- Parent-pending blind spot (codex round-3 review) ----------------------
+//
+// Sharpened-Brief: tag-session read-paths filtered cards by `card:<id>` only.
+// A deck-delete op snapshots its cascade keys at enqueue-time — a card that
+// is created AFTER the enqueue (e.g. through a stale `/deck/:id/card/new`
+// route still open in another tab during the 10s undo window) is not in that
+// snapshot. Its own `card:<id>` therefore does NOT match `isPending`, but its
+// parent `deck:<deckId>` still does. Fix: tag-picker and tag-session-review
+// filter on BOTH `card:<id>` AND `deck:<deckId>` at read-time. (We can't
+// safely mutate cascade keys post-enqueue, so the filter has to be at
+// read-time — see ADR-0014.)
+
+describe("Parent-pending blind spot — TagPickerPage", () => {
+  beforeEach(async () => {
+    await db.open();
+    __resetPendingDeletesForTests();
+  });
+  afterEach(async () => {
+    await db.cards.clear();
+    await db.decks.clear();
+    await db.reviewStates.clear();
+    __resetPendingDeletesForTests();
+  });
+
+  it("excludes a card created AFTER the parent deck was enqueued (stale-route race)", async () => {
+    // Setup: a deck with one card, both due. We enqueue a deck-delete with
+    // ONLY the existing card in the cascade snapshot — mimicking the moment
+    // the user clicks "Deck löschen". Then we sneak a new card into the DB
+    // directly, simulating the stale `/deck/:id/card/new` form submitting
+    // during the 10s undo window. The new card has no `card:<id>` pending
+    // entry; only `deck:<deckId>` would catch it.
+    const deck = await createDeckInDb({ name: "Doomed" });
+    const c1 = await seedDueCard({ deckId: deck.id, front: "C1", tags: ["alpha"] });
+
+    const store = getPendingDeletes();
+    store.enqueue({
+      key: `deck:${deck.id}`,
+      cascadeKeys: [`card:${c1.id}`],
+      label: "Deck gelöscht",
+      commit: async () => {},
+      restore: async () => {},
+    });
+
+    // The stale-route insert: a NEW card under the same (pending-deleted) deck,
+    // not in the cascade snapshot.
+    await seedDueCard({ deckId: deck.id, front: "C-Stale", tags: ["alpha"] });
+
+    const router = await setupTagPickerRouter();
+    render(<RouterProvider router={router} />);
+
+    // Neither C1 (in cascade snapshot) nor C-Stale (caught by parent-deck
+    // filter) should contribute to the `alpha` chip count. Effective count: 0.
+    // A count of 0 means the chip should not appear at all (empty-state branch)
+    // — the picker renders "Du hast noch keine Tags vergeben" instead.
+    await screen.findByText(/Du hast noch keine Tags vergeben/i);
+    expect(screen.queryByRole("button", { name: /alpha/ })).toBeNull();
+  });
+});
+
+describe("Parent-pending blind spot — TagSessionReviewPage", () => {
+  beforeEach(async () => {
+    await db.open();
+    __resetPendingDeletesForTests();
+  });
+  afterEach(async () => {
+    await db.cards.clear();
+    await db.decks.clear();
+    await db.reviewStates.clear();
+    await db.reviews.clear();
+    __resetPendingDeletesForTests();
+  });
+
+  it("excludes a stale-route card from the session queue when the parent deck is pending", async () => {
+    const deck = await createDeckInDb({ name: "Doomed" });
+    const c1 = await seedDueCard({ deckId: deck.id, front: "C1", tags: ["alpha"] });
+
+    const store = getPendingDeletes();
+    store.enqueue({
+      key: `deck:${deck.id}`,
+      cascadeKeys: [`card:${c1.id}`],
+      label: "Deck gelöscht",
+      commit: async () => {},
+      restore: async () => {},
+    });
+
+    // Stale-route insert: new card under the pending-deleted deck, not in cascade.
+    await seedDueCard({ deckId: deck.id, front: "C-Stale", tags: ["alpha"] });
+
+    const router = await setupTagReviewRouter(["alpha"]);
+    render(<RouterProvider router={router} />);
+
+    // Starting an Open-ended session must yield the empty-state, NOT enqueue
+    // C-Stale. If the parent-deck filter were missing, C-Stale would surface
+    // and the rating-buttons would render against the doomed card.
+    const startBtn = await screen.findByRole("button", { name: /Open-ended/i });
+    startBtn.click();
+
+    await screen.findByText(/Keine Cards fällig für diese Tag-Auswahl/i);
+    expect(screen.queryByText("C-Stale")).toBeNull();
+  });
+});

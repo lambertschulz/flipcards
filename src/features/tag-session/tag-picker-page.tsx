@@ -60,13 +60,18 @@ export function TagPickerPage() {
     };
   }, []);
 
-  // Filter out cards whose `card:<id>` is currently pending-deleted —
-  // directly (the user clicked Delete on the card) or via cascade (the
-  // user deleted the parent deck and the coordinator carries `card:<id>`
-  // cascade-keys on the deck-delete op). All subsequent aggregation
-  // (baseline counts, AND-filter, "Session starten" CTA) reads `visibleDue`
-  // so a pending-deleted card cannot leak into a tag session that the user
-  // launches during the 10s undo window.
+  // Filter out cards whose `card:<id>` OR parent `deck:<deckId>` is currently
+  // pending-deleted. The card-key check covers the common path: a deck-delete
+  // op carries `card:<id>` cascade-keys for every child snapshotted at
+  // enqueue-time. The parent-deck-key check is the defence against the
+  // stale-route case — a card created from a `/deck/:id/card/new` route AFTER
+  // the parent deck was enqueued for deletion isn't in the cascade snapshot,
+  // so its own `card:<id>` wouldn't match, but its `deck:<deckId>` still hits.
+  // (We can't safely mutate cascade keys post-enqueue; filtering at read-time
+  // is the architectural answer.) All subsequent aggregation (baseline counts,
+  // AND-filter, "Session starten" CTA) reads `visibleDue` so a pending-deleted
+  // card cannot leak into a tag session that the user launches during the 10s
+  // undo window.
   // `pendingSnapshot` is intentionally part of the deps: it's a fresh
   // reference on every store transition (pending → committing → committed
   // / undone), so listing it here is what forces this memo (and every
@@ -78,7 +83,9 @@ export function TagPickerPage() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: pendingSnapshot is the reactive trigger; see comment above.
   const visibleDue = useMemo(() => {
     if (allDue === null) return null;
-    return allDue.filter((c) => !store.isPending(`card:${c.id}`));
+    return allDue.filter(
+      (c) => !store.isPending(`card:${c.id}`) && !store.isPending(`deck:${c.deckId}`),
+    );
   }, [allDue, store, pendingSnapshot]);
 
   // Universe of tag-baseline-counts: how many due cards carry each tag,

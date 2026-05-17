@@ -17,10 +17,18 @@ export function TagSessionReviewPage({ tags }: { tags: string[] }) {
     // ADR-0014 invariant: a card with a pending-delete op (direct or via
     // deck-cascade) must not be reachable as a "due card" during the 10s
     // undo window — otherwise the session queue would surface a card that
-    // visually no longer exists in the app. Centralised filter via
-    // `store.isPending("card:<id>")`.
+    // visually no longer exists in the app.
+    //
+    // We filter on BOTH the card's own `card:<id>` and its parent
+    // `deck:<deckId>`. The card-key alone is not enough: a deck-delete op
+    // snapshots cascade-keys at enqueue-time, so a card created AFTER enqueue
+    // through a stale `/deck/:id/card/new` route would not have a `card:<id>`
+    // match — but its parent `deck:<deckId>` still hits. Filtering at
+    // read-time covers that race without mutating cascade keys post-enqueue.
     const store = getPendingDeletes();
-    const visible = due.filter((c) => !store.isPending(`card:${c.id}`));
+    const visible = due.filter(
+      (c) => !store.isPending(`card:${c.id}`) && !store.isPending(`deck:${c.deckId}`),
+    );
     return dueCardsForTagAnd(visible, tagSet);
   }, [tagSet]);
 

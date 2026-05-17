@@ -304,6 +304,63 @@ describe("createPendingDeletesStore — lifecycle (visibilitychange + pagehide)"
     off();
   });
 
+  it("flushAll awaits ops already in `committing` state (codex round-3 regression)", async () => {
+    // Regression: a backup-export racing the 10s auto-commit timer would call
+    // `flushAll()` after the timer fired (op already `committing`) but before
+    // the underlying Dexie delete settled. The old implementation only awaited
+    // ops still in `pending`, so `collectBackup()` would proceed and capture
+    // the still-undeleted row — a row the user had marked for deletion.
+    // Fix: flushAll must also await every in-flight `committing` op's
+    // commit-promise. We simulate the race by holding `commit()` open via a
+    // deferred promise; until we resolve it, `flushAll()` must NOT resolve.
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    let commitStarted = false;
+    let commitFinished = false;
+    const commit = vi.fn(async () => {
+      commitStarted = true;
+      await new Promise<void>((res) => {
+        resolveCommit = res;
+      });
+      commitFinished = true;
+    });
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({
+      key: "card:1",
+      label: "x",
+      commit,
+      restore: async () => {},
+    });
+
+    // Fire the auto-commit timer so the op enters `committing` BEFORE flushAll
+    // is called. Wait one microtask so `commitOp` records the in-flight promise.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commitStarted).toBe(true));
+    expect(store.list()[0]?.state).toBe("committing");
+
+    // flushAll must NOT resolve until the in-flight commit settles, even
+    // though the op is no longer in `pending` state.
+    let flushResolved = false;
+    const flushDone = store.flushAll().then(() => {
+      flushResolved = true;
+    });
+
+    // Give microtasks a chance to wrongly resolve flushAll if the bug were
+    // present (committing branch ignored → flushAll has nothing to await).
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(flushResolved).toBe(false);
+    expect(commitFinished).toBe(false);
+
+    // Release the commit; flushAll resolves and the op is gone.
+    resolveCommit();
+    await flushDone;
+    expect(flushResolved).toBe(true);
+    expect(commitFinished).toBe(true);
+    expect(store.list()).toHaveLength(0);
+  });
+
   it("flushAll commits every pending op without affecting committed ones", async () => {
     const scheduler = makeManualScheduler();
     const commitA = vi.fn().mockResolvedValue(undefined);
