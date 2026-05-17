@@ -73,7 +73,7 @@ jobs:
       - name: Measure PR size
         id: pr-size
         run: |
-          pnpm size --json > pr-size.json
+          pnpm exec size-limit --json > pr-size.json
           cat pr-size.json
           PR_BYTES=$(node -e "const r=require('./pr-size.json'); console.log(r[0].size);")
           PR_LIMIT=$(node -e "const r=require('./pr-size.json'); console.log(r[0].sizeLimit);")
@@ -97,7 +97,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          pnpm size --json > base-size.json
+          pnpm exec size-limit --json > base-size.json
           cat base-size.json
           BASE_BYTES=$(node -e "const r=require('./base-size.json'); console.log(r[0].size);")
           echo "bytes=$BASE_BYTES" >> "$GITHUB_OUTPUT"
