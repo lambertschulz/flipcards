@@ -299,3 +299,110 @@ describe("applySharedDeckSetImport — in-file card-id collision (ADR-0018)", ()
     expect(deck1?.cardsSkipped).toBe(1); // the duplicate-id was skipped
   });
 });
+
+// ADR-0010 — Curated-Deck provenance invariant. Round-5 sharpened-brief
+// regression: when a SharedDeckSet entry carries `curatedSourceId` +
+// `contentVersion` AND the local deck already exists by id (merge branch
+// inside `applyOneDeck`), the persisted deck row MUST end up carrying the
+// payload's values. Without the stamp, a re-import of the same Curated set
+// with a bumped per-deck `contentVersion` would silently leave the row
+// claiming the old version.
+//
+// Tests assert against `db.decks.get(...)` directly to exercise the
+// persisted state. The set wrapper itself has no provenance fields in
+// Curated v1 (spec: decks only), so no set-row assertion is needed.
+describe("applySharedDeckSetImport — ADR-0010 Curated provenance (member-deck merge branch)", () => {
+  it("stamps incoming curatedSourceId + contentVersion onto an existing member deck on re-import", async () => {
+    // Pre-seed: a Curated deck-set member already imported at v1.
+    await db.deckSets.add({ id: "set-shareset01", name: "Sprachen" });
+    await db.decks.add({
+      id: "deck-shareset01",
+      name: "Französisch",
+      deckSetId: "set-shareset01",
+      curatedSourceId: "fr-basics",
+      contentVersion: 1,
+    });
+
+    // Re-import the same set; the French deck bumps to v2. (Italian is
+    // unchanged structurally — the second entry just covers the new-deck
+    // path under the merged set wrapper, no assertions on it here.)
+    const summary = await applySharedDeckSetImport(
+      makeFile({
+        decks: [
+          {
+            id: "deck-shareset01",
+            name: "Französisch",
+            curatedSourceId: "fr-basics",
+            contentVersion: 2,
+            cards: [
+              { id: "card-shareset01", front: "bonjour", back: "hallo", tags: ["fr"] },
+              { id: "card-shareset02", front: "au revoir", back: "tschüss", tags: [] },
+            ],
+          },
+          {
+            id: "deck-shareset02",
+            name: "Italienisch",
+            cards: [
+              { id: "card-shareset03", front: "buongiorno", back: "guten Tag", tags: ["it"] },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const french = summary.decks.find((d) => d.deckId === "deck-shareset01");
+    expect(french?.mode).toBe("merged");
+
+    // Persisted row carries the bumped version. Curated re-import is the
+    // canonical source of truth — incoming overrides existing.
+    const deck = await db.decks.get("deck-shareset01");
+    expect(deck?.curatedSourceId).toBe("fr-basics");
+    expect(deck?.contentVersion).toBe(2);
+    // Local name + deckSetId still win (merge branch leaves those alone).
+    expect(deck?.name).toBe("Französisch");
+    expect(deck?.deckSetId).toBe("set-shareset01");
+  });
+
+  it("stamps provenance on a member-deck merge even when the existing local row had no provenance", async () => {
+    // The user hand-built a deck whose id matches a curator-assigned id,
+    // OR an earlier peer-shared import landed it. First Curated import of
+    // the containing set must promote the row to "curated-tracked".
+    await db.decks.add({ id: "deck-shareset01", name: "Eigenes Französisch" });
+
+    await applySharedDeckSetImport(
+      makeFile({
+        decks: [
+          {
+            id: "deck-shareset01",
+            name: "Französisch",
+            curatedSourceId: "fr-basics",
+            contentVersion: 3,
+            cards: [{ id: "card-shareset01", front: "bonjour", back: "hallo", tags: ["fr"] }],
+          },
+        ],
+      }),
+    );
+
+    const deck = await db.decks.get("deck-shareset01");
+    expect(deck?.curatedSourceId).toBe("fr-basics");
+    expect(deck?.contentVersion).toBe(3);
+  });
+
+  it("leaves existing provenance intact when the incoming entry carries none (peer-shared re-import over a Curated member row)", async () => {
+    // Local row was Curated-tracked; the user imports a peer-shared set
+    // file (no provenance fields on its entries). Don't strip — absence
+    // of the fields is not an instruction to clear them.
+    await db.decks.add({
+      id: "deck-shareset01",
+      name: "Französisch",
+      curatedSourceId: "fr-basics",
+      contentVersion: 1,
+    });
+
+    await applySharedDeckSetImport(makeFile()); // default has no provenance
+
+    const deck = await db.decks.get("deck-shareset01");
+    expect(deck?.curatedSourceId).toBe("fr-basics");
+    expect(deck?.contentVersion).toBe(1);
+  });
+});

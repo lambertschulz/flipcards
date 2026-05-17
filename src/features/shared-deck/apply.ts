@@ -127,6 +127,27 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
           await db.cards.bulkPut(toAdd);
         }
 
+        // ADR-0010 — Curated-Deck provenance invariant. For every deck row
+        // written or updated as part of a Curated import (payload carries
+        // `curatedSourceId`/`contentVersion`), `decks.curatedSourceId` and
+        // `decks.contentVersion` MUST equal the payload's values after the
+        // transaction commits — regardless of which branch we took. Curated
+        // re-import is the canonical source of truth for those fields, so
+        // incoming wins over existing here (a bumped `contentVersion` MUST
+        // land; otherwise the user "updated" the deck but the row still
+        // claims the old version). Deck name/description still stay as they
+        // are locally — only the provenance pair is stamped.
+        const provenanceUpdate: Partial<Pick<DeckRow, "curatedSourceId" | "contentVersion">> = {};
+        if (file.deck.curatedSourceId !== undefined) {
+          provenanceUpdate.curatedSourceId = file.deck.curatedSourceId;
+        }
+        if (file.deck.contentVersion !== undefined) {
+          provenanceUpdate.contentVersion = file.deck.contentVersion;
+        }
+        if (Object.keys(provenanceUpdate).length > 0) {
+          await db.decks.update(existingDeck.id, provenanceUpdate);
+        }
+
         return {
           mode: "merged",
           deckId: existingDeck.id,

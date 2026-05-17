@@ -190,6 +190,24 @@ async function applyOneDeck(
     );
     await purgeOrphanReviewRowsAndInsert(toAdd);
 
+    // ADR-0010 — Curated-Deck provenance invariant. Same rule as the
+    // single-deck merge branch (`applySharedDeckImport`): when the payload
+    // carries `curatedSourceId`/`contentVersion`, stamp them onto the
+    // existing local deck row. Curated re-import is the canonical source
+    // of truth for those fields, so incoming overrides existing — a bumped
+    // `contentVersion` MUST land. Deck name/description/deckSetId remain
+    // as they are locally; only the provenance pair is updated.
+    const provenanceUpdate: Partial<Pick<DeckRow, "curatedSourceId" | "contentVersion">> = {};
+    if (entry.curatedSourceId !== undefined) {
+      provenanceUpdate.curatedSourceId = entry.curatedSourceId;
+    }
+    if (entry.contentVersion !== undefined) {
+      provenanceUpdate.contentVersion = entry.contentVersion;
+    }
+    if (Object.keys(provenanceUpdate).length > 0) {
+      await db.decks.update(existingDeck.id, provenanceUpdate);
+    }
+
     return {
       deckResult: {
         mode: "merged",
