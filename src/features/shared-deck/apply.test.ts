@@ -394,13 +394,10 @@ describe("applySharedDeckImport — pending-delete coordinator drain (ADR-0014)"
       tags: [],
     });
 
-    // Record the order in which the pending commit and the import's
-    // first DB write happen, so the test proves flush-BEFORE-import.
-    const events: string[] = [];
+    // The commit thunk actually deletes the row, so the import's global
+    // card-ID scan sees a DB without `card-pending-del` — the
+    // consistent-view guarantee.
     const commit = vi.fn().mockImplementation(async () => {
-      events.push("commit");
-      // Actually delete the row, so the import's global card-ID scan sees
-      // a DB without `card-pending-del` — the consistent-view guarantee.
       await db.cards.delete("card-pending-del");
     });
     store.enqueue({
@@ -411,21 +408,16 @@ describe("applySharedDeckImport — pending-delete coordinator drain (ADR-0014)"
     });
     expect(store.list()).toHaveLength(1);
 
-    // Spy on the cards.bulkPut Dexie verb to record "import" in the same
-    // ordering log. `bulkPut` is the first write the import does to the
-    // cards table; if it fires before `commit`, flush-before-import is
-    // violated. We call through to the original via `apply` rather than
-    // re-typing Dexie's overloaded signature.
-    const originalBulkPut = db.cards.bulkPut.bind(db.cards);
+    // Spy on the cards.bulkPut Dexie verb. `bulkPut` is the first write
+    // the import does to the cards table; if it fires before `commit`,
+    // flush-before-import is violated. We rely on Vitest's
+    // `mock.invocationCallOrder` — a monotonically-increasing number
+    // assigned across all spies — to prove ordering, so the spy keeps its
+    // default call-through behaviour and Dexie's overloaded signature
+    // never needs to be re-typed.
     const bulkPutSpy = vi.spyOn(db.cards, "bulkPut");
-    bulkPutSpy.mockImplementation(((...args: unknown[]) => {
-      events.push("import");
-      return (originalBulkPut as (...a: unknown[]) => unknown)(...args);
-    }) as unknown as typeof db.cards.bulkPut);
 
     await applySharedDeckImport(makeFile());
-
-    bulkPutSpy.mockRestore();
 
     // (a) Pending commit thunk WAS called — flush, not cancel.
     expect(commit).toHaveBeenCalledTimes(1);
@@ -434,7 +426,12 @@ describe("applySharedDeckImport — pending-delete coordinator drain (ADR-0014)"
 
     // (a, ordering) Commit ran BEFORE the import's first bulkPut. This is
     // the "flush-before-import" assertion the codex review asked for.
-    expect(events).toEqual(["commit", "import"]);
+    // Note: assert before `mockRestore`, which wipes `mock.calls` and
+    // `mock.invocationCallOrder`.
+    expect(bulkPutSpy).toHaveBeenCalled();
+    expect(commit.mock.invocationCallOrder[0]).toBeLessThan(bulkPutSpy.mock.invocationCallOrder[0]);
+
+    bulkPutSpy.mockRestore();
 
     // (b) Imported cards landed alongside the now-committed delete result:
     //   - the previously-pending row is gone (commit ran);
