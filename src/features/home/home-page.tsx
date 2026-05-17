@@ -10,6 +10,7 @@ import {
   computeHomeSummary,
 } from "@/features/home/home-read-model";
 import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
+import { useVisibleCards, useVisibleDeckSets, useVisibleDecks } from "@/lib/pending-deletes-react";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useMemo, useState } from "react";
@@ -97,15 +98,27 @@ function useNow(intervalMs = 60_000): number {
  * disabled. Wiring is the respective import-feature ticket's responsibility.
  */
 export function HomePage() {
-  const decks = useLiveQuery(() => db.decks.orderBy("name").toArray(), [], undefined);
-  const deckSets = useLiveQuery(() => db.deckSets.orderBy("name").toArray(), [], undefined);
-  const cards = useLiveQuery(() => db.cards.toArray(), [], undefined);
+  // All entity-table reads go through the visibility-filtered hooks
+  // (`useVisibleDecks` / `useVisibleDeckSets` / `useVisibleCards`) so the
+  // ADR-0014 invariant — no read-model surfaces a row whose pending-delete
+  // op is in `pending` or `committing` state, including cascade descendants
+  // — is enforced uniformly. These hooks subscribe to the pending-deletes
+  // store internally, so any op transition (pending → committing →
+  // committed / undone) re-renders this component without an extra
+  // `usePendingDeletes()` call.
+  const visibleDecks = useVisibleDecks(() => db.decks.orderBy("name").toArray(), []);
+  const visibleDeckSets = useVisibleDeckSets(() => db.deckSets.orderBy("name").toArray(), []);
+  const visibleCards = useVisibleCards(() => db.cards.toArray(), []);
+  // `reviewStates` is not subject to the pending-delete invariant — review
+  // states for a pending-deleted card aren't *rendered*, only consumed by the
+  // due-count read-model, which iterates `visibleCards`. Stale entries are
+  // a no-op until they're filtered by the cascade commit.
   const reviewStates = useLiveQuery(() => db.reviewStates.toArray(), [], undefined);
 
   const loading =
-    decks === undefined ||
-    deckSets === undefined ||
-    cards === undefined ||
+    visibleDecks === undefined ||
+    visibleDeckSets === undefined ||
+    visibleCards === undefined ||
     reviewStates === undefined;
 
   // `now` ticks on a visibility-aware 60 s interval (see `useNow`). Dexie
@@ -127,17 +140,16 @@ export function HomePage() {
     return (cardId: string) => map.get(cardId) ?? INITIAL_REVIEW_STATE;
   }, [reviewStates]);
 
-  const decksWithCounts = useMemo<DeckWithCounts[]>(() => {
-    if (!decks || !cards) return [];
-    return computeDecksWithCounts(decks, cards, stateLookup, now);
-  }, [decks, cards, stateLookup, now]);
+  const decksWithCounts: DeckWithCounts[] = loading
+    ? []
+    : computeDecksWithCounts(visibleDecks ?? [], visibleCards ?? [], stateLookup, now);
 
-  const summary = useMemo<HomeSummary>(() => {
-    if (!cards) return { totalDue: 0, decksWithDue: 0 };
-    return computeHomeSummary(cards, stateLookup, now);
-  }, [cards, stateLookup, now]);
+  const summary: HomeSummary = loading
+    ? { totalDue: 0, decksWithDue: 0 }
+    : computeHomeSummary(visibleCards ?? [], stateLookup, now);
 
-  const hasAny = !loading && ((decks?.length ?? 0) > 0 || (deckSets?.length ?? 0) > 0);
+  const hasAny =
+    !loading && ((visibleDecks ?? []).length > 0 || (visibleDeckSets ?? []).length > 0);
 
   return (
     <section className="space-y-4">
@@ -152,7 +164,7 @@ export function HomePage() {
       ) : (
         <>
           <TodayResume summary={summary} />
-          <DeckGroups decks={decksWithCounts} deckSets={deckSets ?? []} />
+          <DeckGroups decks={decksWithCounts} deckSets={visibleDeckSets ?? []} />
         </>
       )}
 

@@ -1,3 +1,4 @@
+import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
 import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
@@ -38,6 +39,7 @@ const rootRoute = createRootRoute({
       <main>
         <Outlet />
       </main>
+      <PendingDeleteToasts />
     </div>
   ),
 });

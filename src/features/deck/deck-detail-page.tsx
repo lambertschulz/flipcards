@@ -1,24 +1,44 @@
 import { Button } from "@/components/ui/button";
-import { deleteCard } from "@/db/cards";
 import { db } from "@/db/database";
-import { Link } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
+import { deleteCardWithCascade, restoreDeletedCard } from "@/db/deletion";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useVisibleCards, useVisibleDeck, useVisibleDeckSet } from "@/lib/pending-deletes-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
-  const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
-  const deckSet = useLiveQuery(
-    async () => (deck?.deckSetId ? await db.deckSets.get(deck.deckSetId) : undefined),
-    [deck?.deckSetId],
-    undefined,
-  );
-  const cards = useLiveQuery(
-    () => db.cards.where("deckId").equals(deckId).toArray(),
-    [deckId],
-    undefined,
-  );
+  const navigate = useNavigate();
+  // ADR-0014: route every read through the visibility-filtered hooks so a
+  // pending-deleted deck (or any pending-deleted child card) cannot surface
+  // here. `useVisibleDeck` returns `undefined` when the deck's
+  // `deck:<id>` op is in the pending-delete window.
+  const deck = useVisibleDeck(deckId);
+  // Pass the parent deck-set id (may be undefined → hook resolves to
+  // undefined). The hook itself enforces the pending-delete invariant for
+  // deck-sets, which matters here because the deck-set row is rendered as
+  // part of the deck-detail header.
+  const deckSet = useVisibleDeckSet(deck?.deckSetId ?? "");
+  const cards = useVisibleCards(() => db.cards.where("deckId").equals(deckId).toArray(), [deckId]);
+
+  // Page-level pending-delete guard: a pending-deleted Deck must NOT remain
+  // navigable during the 10s undo window. `useVisibleDeck` already hides the
+  // row (returns `undefined`); we additionally redirect back to home so the
+  // user sees the toast and not a "Deck nicht gefunden" branch glued open
+  // by browser back/forward.
+  const deckIsPending = useDeckIsPending(deckId);
+  useEffect(() => {
+    if (deckIsPending) {
+      void navigate({ to: "/" });
+    }
+  }, [deckIsPending, navigate]);
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
+  }
+  if (deckIsPending) {
+    // Render nothing while the navigate effect resolves. The row is also
+    // already filtered out of the home view.
+    return null;
   }
   if (deck === undefined) {
     return (
@@ -90,8 +110,20 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={async () => {
-                  if (confirm("Card endgültig löschen?")) await deleteCard(card.id);
+                onClick={() => {
+                  // ADR-0014: Card-Delete läuft ohne Modal — nur Undo-Toast.
+                  const store = getPendingDeletes();
+                  let snapshot: Awaited<ReturnType<typeof deleteCardWithCascade>> | null = null;
+                  store.enqueue({
+                    key: `card:${card.id}`,
+                    label: "Card gelöscht",
+                    commit: async () => {
+                      snapshot = await deleteCardWithCascade(card.id);
+                    },
+                    restore: async () => {
+                      if (snapshot) await restoreDeletedCard(snapshot);
+                    },
+                  });
                 }}
                 aria-label="Card löschen"
               >
@@ -111,4 +143,19 @@ function firstLine(markdown: string): string {
     .replace(/^#+\s*/, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "[Bild]")
     .trim();
+}
+
+/**
+ * Helper for the page-level redirect guard — subscribes to the
+ * pending-deletes store and reports whether the deck row is hidden by the
+ * visibility filter. Lives here (not in `pending-deletes-react.ts`) because
+ * it is a per-callsite UX decision (redirect vs render-empty); the invariant
+ * itself is enforced by `useVisibleDeck`.
+ */
+function useDeckIsPending(deckId: string): boolean {
+  // We subscribe through `useVisibleDeck`'s machinery indirectly via
+  // `getPendingDeletes().isPending`. To avoid duplicating
+  // `usePendingDeletes()` (and to keep the redirect tight), we read the
+  // store inline; the parent component already subscribes via `useVisibleDeck`.
+  return getPendingDeletes().isPending(`deck:${deckId}`);
 }
