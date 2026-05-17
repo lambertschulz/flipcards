@@ -1,5 +1,8 @@
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
+import { DeckSetCreatePage } from "@/features/deck-set/deck-set-create-page";
+import { DeckSetDetailPage } from "@/features/deck-set/deck-set-detail-page";
+import { DeckSetSettingsPage } from "@/features/deck-set/deck-set-settings-page";
 import { DeckCreatePage } from "@/features/deck/deck-create-page";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
 import { DeckListPage } from "@/features/deck/deck-list-page";
@@ -65,6 +68,30 @@ const deckSettingsRoute = createRoute({
   component: function DeckSettingsRouteComponent() {
     const { deckId } = deckSettingsRoute.useParams();
     return <DeckSettingsPage deckId={deckId} />;
+  },
+});
+
+const deckSetCreateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck-set/new",
+  component: DeckSetCreatePage,
+});
+
+const deckSetDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck-set/$deckSetId",
+  component: function DeckSetDetailRouteComponent() {
+    const { deckSetId } = deckSetDetailRoute.useParams();
+    return <DeckSetDetailPage deckSetId={deckSetId} />;
+  },
+});
+
+const deckSetSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/deck-set/$deckSetId/settings",
+  component: function DeckSetSettingsRouteComponent() {
+    const { deckSetId } = deckSetSettingsRoute.useParams();
+    return <DeckSetSettingsPage deckSetId={deckSetId} />;
   },
 });
 
@@ -165,6 +192,9 @@ export const routeTree = rootRoute.addChildren([
   deckCreateRoute,
   deckDetailRoute,
   deckSettingsRoute,
+  deckSetCreateRoute,
+  deckSetDetailRoute,
+  deckSetSettingsRoute,
   cardCreateRoute,
   cardEditRoute,
   reviewSessionRoute,

@@ -16,7 +16,7 @@ describe("FlipcardsDatabase", () => {
     instance = new FlipcardsDatabase();
     await instance.open();
 
-    expect(instance.verno).toBe(3);
+    expect(instance.verno).toBe(4);
     expect(instance.tables.map((t) => t.name).sort()).toEqual([
       "cards",
       "deckSets",
