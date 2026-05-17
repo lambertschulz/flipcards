@@ -56,7 +56,28 @@ export function DeckCardFilterBar({ cards, dueCardIds, state, onChange }: DeckCa
     [cards, state.query, state.status, dueCardIds],
   );
 
-  const selectedTags = new Set(state.tags);
+  const selectedTags = useMemo(() => new Set(state.tags), [state.tags]);
+
+  // Selected-state visibility invariant (PR #43 round-3 review feedback):
+  // a tag that the user has selected must remain visible — and toggle-off-
+  // able from the chip itself — even when the search/status prefilter
+  // reduces its count to zero. `tagCounts` is computed from the prefiltered
+  // set so it may drop a selected tag entirely; we splice those tags back
+  // in with `count: 0` so the chip stays rendered with `aria-pressed=true`.
+  //
+  // Why we keep them at the *end* (instead of merging by alpha): the natural
+  // order of `tagCounts` is by frequency in the current prefilter; appending
+  // the zero-count selected tags after that list keeps the user's attention
+  // on the chips that still match real cards while still surfacing the
+  // "stuck" selection so they can release it.
+  const displayedTagCounts = useMemo(() => {
+    const seen = new Set(tagCounts.map((t) => t.tag));
+    const extras: { tag: string; count: number }[] = [];
+    for (const tag of state.tags) {
+      if (!seen.has(tag)) extras.push({ tag, count: 0 });
+    }
+    return extras.length === 0 ? tagCounts : [...tagCounts, ...extras];
+  }, [tagCounts, state.tags]);
 
   const toggleTag = (tag: string) => {
     const next = new Set(selectedTags);
@@ -98,9 +119,9 @@ export function DeckCardFilterBar({ cards, dueCardIds, state, onChange }: DeckCa
         />
       </fieldset>
 
-      {tagCounts.length > 0 ? (
+      {displayedTagCounts.length > 0 ? (
         <ul className="flex flex-wrap gap-2">
-          {tagCounts.map(({ tag, count }) => {
+          {displayedTagCounts.map(({ tag, count }) => {
             const isSelected = selectedTags.has(tag);
             return (
               <li key={tag}>

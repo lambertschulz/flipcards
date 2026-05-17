@@ -1,0 +1,484 @@
+import { type Scheduler, createPendingDeletesStore } from "@/lib/pending-deletes";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Build a controllable scheduler that records pending callbacks and lets the
+// test fire them on demand. We deliberately avoid `vi.useFakeTimers()` here
+// because the coordinator's lifecycle handlers run synchronously and we want
+// fine-grained control over which timers exist when.
+function makeManualScheduler(): Scheduler & {
+  pending(): number;
+  fireAll(): void;
+  fire(handle: unknown): void;
+} {
+  type Entry = { handle: unknown; fn: () => void };
+  const entries: Entry[] = [];
+  let nextHandle = 1;
+  return {
+    setTimeout(fn) {
+      const handle = nextHandle++;
+      entries.push({ handle, fn });
+      return handle;
+    },
+    clearTimeout(handle) {
+      const i = entries.findIndex((e) => e.handle === handle);
+      if (i >= 0) entries.splice(i, 1);
+    },
+    pending() {
+      return entries.length;
+    },
+    fireAll() {
+      const snapshot = entries.splice(0, entries.length);
+      for (const e of snapshot) e.fn();
+    },
+    fire(handle) {
+      const i = entries.findIndex((e) => e.handle === handle);
+      if (i < 0) return;
+      const [entry] = entries.splice(i, 1);
+      entry.fn();
+    },
+  };
+}
+
+describe("createPendingDeletesStore — basic enqueue/commit", () => {
+  it("auto-commits after the hold timeout", async () => {
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+    const restore = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ holdMs: 10_000, scheduler });
+    store.enqueue({ key: "card:1", label: "Card gelöscht", commit, restore });
+
+    expect(store.list()).toHaveLength(1);
+    expect(scheduler.pending()).toBe(1);
+
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    expect(store.list()).toHaveLength(0); // dropped from visible list after commit
+    expect(store.isPending("card:1")).toBe(false);
+  });
+
+  it("undo cancels the timer and skips commit", async () => {
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn();
+    const restore = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const id = store.enqueue({ key: "card:1", label: "x", commit, restore });
+    expect(store.isPending("card:1")).toBe(true);
+
+    await store.undo(id);
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(store.isPending("card:1")).toBe(false);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("undo of one op does not affect a sibling op (stacking)", async () => {
+    const scheduler = makeManualScheduler();
+    const commitA = vi.fn().mockResolvedValue(undefined);
+    const commitB = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const idA = store.enqueue({
+      key: "card:A",
+      label: "A",
+      commit: commitA,
+      restore: async () => {},
+    });
+    store.enqueue({
+      key: "card:B",
+      label: "B",
+      commit: commitB,
+      restore: async () => {},
+    });
+
+    expect(store.list()).toHaveLength(2);
+    expect(scheduler.pending()).toBe(2);
+
+    await store.undo(idA);
+    expect(store.isPending("card:A")).toBe(false);
+    expect(store.isPending("card:B")).toBe(true);
+    expect(scheduler.pending()).toBe(1);
+
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commitB).toHaveBeenCalledTimes(1));
+    expect(commitA).not.toHaveBeenCalled();
+  });
+
+  it("notifies subscribers on enqueue / undo / commit", async () => {
+    const scheduler = makeManualScheduler();
+    const store = createPendingDeletesStore({ scheduler });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    const id = store.enqueue({
+      key: "k",
+      label: "x",
+      commit: async () => {},
+      restore: async () => {},
+    });
+    expect(listener).toHaveBeenCalled();
+    const callsAfterEnqueue = listener.mock.calls.length;
+
+    await store.undo(id);
+    expect(listener.mock.calls.length).toBeGreaterThan(callsAfterEnqueue);
+  });
+
+  it("subscribe returns an unsubscribe", () => {
+    const store = createPendingDeletesStore({ scheduler: makeManualScheduler() });
+    const listener = vi.fn();
+    const off = store.subscribe(listener);
+    off();
+    store.enqueue({
+      key: "k",
+      label: "x",
+      commit: async () => {},
+      restore: async () => {},
+    });
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("createPendingDeletesStore — undo while commit in flight", () => {
+  it("rejects undo during an in-flight commit and lets the commit finish", async () => {
+    const scheduler = makeManualScheduler();
+
+    // A deferred promise lets us hold commit() open until we manually resolve it.
+    let resolveCommit!: () => void;
+    const commitGate = new Promise<void>((res) => {
+      resolveCommit = res;
+    });
+    const commit = vi.fn(async () => {
+      await commitGate;
+    });
+    const restore = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const id = store.enqueue({ key: "card:1", label: "x", commit, restore });
+
+    // Advance the timer so commitOp starts, but commit() hasn't resolved yet.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    // While commit is in flight the op must be visible as `committing`, NOT
+    // `pending` — that's what lets the UI hide the Rückgängig affordance.
+    const inFlight = store.list().find((o) => o.id === id);
+    expect(inFlight?.state).toBe("committing");
+
+    // Attempting undo during the in-flight window must be a no-op:
+    // restore must NOT run.
+    await store.undo(id);
+    expect(restore).not.toHaveBeenCalled();
+
+    // The commit was already in-flight — let it finish; data is still deleted.
+    resolveCommit();
+    await vi.waitFor(() => expect(store.list()).toHaveLength(0));
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps `isPending(key)` true while the commit is in flight", async () => {
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    const commit = vi.fn(
+      () =>
+        new Promise<void>((res) => {
+          resolveCommit = res;
+        }),
+    );
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    // Row should still be hidden from the UI while the IDB transaction runs.
+    expect(store.isPending("card:1")).toBe(true);
+
+    resolveCommit();
+    await vi.waitFor(() => expect(store.isPending("card:1")).toBe(false));
+  });
+});
+
+describe("createPendingDeletesStore — error paths", () => {
+  it("transitions to `failed` and notifies onError when commit rejects", async () => {
+    const scheduler = makeManualScheduler();
+    const onError = vi.fn();
+    const store = createPendingDeletesStore({ scheduler, onError });
+
+    store.enqueue({
+      key: "k",
+      label: "x",
+      commit: async () => {
+        throw new Error("idb dead");
+      },
+      restore: async () => {},
+    });
+
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(store.list()[0]?.state).toBe("failed");
+    expect(store.list()[0]?.error).toContain("idb dead");
+  });
+});
+
+describe("createPendingDeletesStore — lifecycle (visibilitychange + pagehide)", () => {
+  let originalVis: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalVis = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+  });
+  afterEach(() => {
+    if (originalVis) Object.defineProperty(Document.prototype, "visibilityState", originalVis);
+  });
+
+  function setVisibilityState(value: "hidden" | "visible") {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => value,
+    });
+  }
+
+  it("flushes pending ops synchronously when `visibilityState` becomes hidden", async () => {
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const off = store.installLifecycleListeners(window, document);
+
+    store.enqueue({
+      key: "k",
+      label: "x",
+      commit,
+      restore: async () => {},
+    });
+
+    setVisibilityState("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    off();
+  });
+
+  it("does NOT flush when visibility becomes visible again", async () => {
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const off = store.installLifecycleListeners(window, document);
+
+    store.enqueue({
+      key: "k",
+      label: "x",
+      commit,
+      restore: async () => {},
+    });
+
+    setVisibilityState("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // Give microtasks a chance to flush; nothing should have fired.
+    await Promise.resolve();
+    expect(commit).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("flushes pending ops on `pagehide`", async () => {
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    const off = store.installLifecycleListeners(window, document);
+
+    store.enqueue({
+      key: "k",
+      label: "x",
+      commit,
+      restore: async () => {},
+    });
+
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    off();
+  });
+
+  it("flushAll awaits ops already in `committing` state (codex round-3 regression)", async () => {
+    // Regression: a backup-export racing the 10s auto-commit timer would call
+    // `flushAll()` after the timer fired (op already `committing`) but before
+    // the underlying Dexie delete settled. The old implementation only awaited
+    // ops still in `pending`, so `collectBackup()` would proceed and capture
+    // the still-undeleted row — a row the user had marked for deletion.
+    // Fix: flushAll must also await every in-flight `committing` op's
+    // commit-promise. We simulate the race by holding `commit()` open via a
+    // deferred promise; until we resolve it, `flushAll()` must NOT resolve.
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    let commitStarted = false;
+    let commitFinished = false;
+    const commit = vi.fn(async () => {
+      commitStarted = true;
+      await new Promise<void>((res) => {
+        resolveCommit = res;
+      });
+      commitFinished = true;
+    });
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({
+      key: "card:1",
+      label: "x",
+      commit,
+      restore: async () => {},
+    });
+
+    // Fire the auto-commit timer so the op enters `committing` BEFORE flushAll
+    // is called. Wait one microtask so `commitOp` records the in-flight promise.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commitStarted).toBe(true));
+    expect(store.list()[0]?.state).toBe("committing");
+
+    // flushAll must NOT resolve until the in-flight commit settles, even
+    // though the op is no longer in `pending` state.
+    let flushResolved = false;
+    const flushDone = store.flushAll().then(() => {
+      flushResolved = true;
+    });
+
+    // Give microtasks a chance to wrongly resolve flushAll if the bug were
+    // present (committing branch ignored → flushAll has nothing to await).
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(flushResolved).toBe(false);
+    expect(commitFinished).toBe(false);
+
+    // Release the commit; flushAll resolves and the op is gone.
+    resolveCommit();
+    await flushDone;
+    expect(flushResolved).toBe(true);
+    expect(commitFinished).toBe(true);
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it("cancelAll discards pending ops without invoking their commit fns (round-4)", async () => {
+    // ADR-0014 class (b): destructive bulk-replace paths (backup-restore,
+    // global wipe) call `cancelAll()` to drain the coordinator BEFORE
+    // clobbering the DB. Discard semantics — commit must NOT fire, because
+    // the rows in the DB were never touched and the caller is about to
+    // overwrite them anyway. If commit fired, a deferred delete whose
+    // primary key collides with a freshly-imported backup row would
+    // silently delete the new data.
+    const scheduler = makeManualScheduler();
+    const commitA = vi.fn().mockResolvedValue(undefined);
+    const commitB = vi.fn().mockResolvedValue(undefined);
+    const restoreA = vi.fn().mockResolvedValue(undefined);
+    const restoreB = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "A", commit: commitA, restore: restoreA });
+    store.enqueue({ key: "card:2", label: "B", commit: commitB, restore: restoreB });
+
+    expect(store.list()).toHaveLength(2);
+    expect(scheduler.pending()).toBe(2);
+
+    await store.cancelAll();
+
+    expect(commitA).not.toHaveBeenCalled();
+    expect(commitB).not.toHaveBeenCalled();
+    // restore is also not called: the rows were never touched, so there's
+    // nothing to restore. (Compare with `undo`, which DOES call restore for
+    // symmetry with future variants that touch IDB pre-commit.)
+    expect(restoreA).not.toHaveBeenCalled();
+    expect(restoreB).not.toHaveBeenCalled();
+    expect(store.list()).toHaveLength(0);
+    expect(store.isPending("card:1")).toBe(false);
+    expect(store.isPending("card:2")).toBe(false);
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("cancelAll awaits any commit already in flight (round-4)", async () => {
+    // Race shape: the 10s auto-commit timer fires for op X at the exact
+    // moment the user clicks "Backup importieren". The import code calls
+    // `cancelAll()`. Op X is no longer `pending` — it's `committing`,
+    // with a Dexie transaction in flight. `cancelAll()` must NOT resolve
+    // until that transaction settles, otherwise the import's own
+    // transaction would race the delete-transaction.
+    const scheduler = makeManualScheduler();
+    let resolveCommit!: () => void;
+    let commitFinished = false;
+    const commit = vi.fn(async () => {
+      await new Promise<void>((res) => {
+        resolveCommit = res;
+      });
+      commitFinished = true;
+    });
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    // Fire the auto-commit timer so the op enters `committing`.
+    scheduler.fireAll();
+    await vi.waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    expect(store.list()[0]?.state).toBe("committing");
+
+    let cancelResolved = false;
+    const cancelDone = store.cancelAll().then(() => {
+      cancelResolved = true;
+    });
+
+    // Without the in-flight await, cancelAll would resolve immediately;
+    // microtasks let that wrong resolution surface if the bug is present.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cancelResolved).toBe(false);
+    expect(commitFinished).toBe(false);
+
+    resolveCommit();
+    await cancelDone;
+    expect(cancelResolved).toBe(true);
+    expect(commitFinished).toBe(true);
+  });
+
+  it("cancelAll defuses a late-firing timer that races the cancel call (round-4)", async () => {
+    // Edge case: the timer is sitting in the scheduler queue but hasn't
+    // fired yet when `cancelAll()` is called. After `cancelAll()` resolves,
+    // if the scheduler then fires the (now stale) timer, the captured
+    // commit thunk must not run — the op was discarded.
+    const scheduler = makeManualScheduler();
+    const commit = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({ key: "card:1", label: "x", commit, restore: async () => {} });
+
+    await store.cancelAll();
+    expect(commit).not.toHaveBeenCalled();
+    // The timer has been cleared from the scheduler — nothing to fire.
+    expect(scheduler.pending()).toBe(0);
+  });
+
+  it("flushAll commits every pending op without affecting committed ones", async () => {
+    const scheduler = makeManualScheduler();
+    const commitA = vi.fn().mockResolvedValue(undefined);
+    const commitB = vi.fn().mockResolvedValue(undefined);
+
+    const store = createPendingDeletesStore({ scheduler });
+    store.enqueue({
+      key: "a",
+      label: "A",
+      commit: commitA,
+      restore: async () => {},
+    });
+    store.enqueue({
+      key: "b",
+      label: "B",
+      commit: commitB,
+      restore: async () => {},
+    });
+
+    await store.flushAll();
+    expect(commitA).toHaveBeenCalledTimes(1);
+    expect(commitB).toHaveBeenCalledTimes(1);
+    expect(store.list()).toHaveLength(0);
+  });
+});

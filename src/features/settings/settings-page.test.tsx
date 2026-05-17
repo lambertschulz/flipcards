@@ -27,8 +27,13 @@ async function setupRouter(initialPath = "/settings") {
     path: "/settings",
     component: SettingsPage,
   });
+  const backupImportRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/backup/import",
+    component: () => <div>Backup-Import</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([homeRoute, settingsRoute]),
+    routeTree: rootRoute.addChildren([homeRoute, settingsRoute, backupImportRoute]),
     history: createMemoryHistory({ initialEntries: [initialPath] }),
   });
   await router.load();
@@ -162,15 +167,29 @@ describe("SettingsPage", () => {
     });
   });
 
-  it("the backup-now button is a stub that surfaces 'not yet implemented'", async () => {
+  it("'Backup jetzt erstellen' triggers a real export (issue #21)", async () => {
+    // Stub URL.createObjectURL + the anchor click so the test exercises the
+    // wiring without actually trying to open a save dialog in JSDOM.
+    const objectUrl = "blob:mock";
+    const createObjectURL = vi.fn(() => objectUrl);
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+
+    // Seed at least one deck so the resulting backup is non-empty.
+    const deck = await createDeckInDb({ name: "Vokabeln" });
+    await createCardInDb({ deckId: deck.id, front: "f", back: "b" });
+
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
     const router = await setupRouter();
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
-    try {
-      render(<RouterProvider router={router} />);
-      await clickAndFlush(await screen.findByRole("button", { name: /Backup jetzt erstellen/ }));
-      expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/noch nicht implementiert/));
-    } finally {
-      alertSpy.mockRestore();
-    }
+    render(<RouterProvider router={router} />);
+    await clickAndFlush(await screen.findByRole("button", { name: /Backup jetzt erstellen/ }));
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+
+    clickSpy.mockRestore();
   });
 });
