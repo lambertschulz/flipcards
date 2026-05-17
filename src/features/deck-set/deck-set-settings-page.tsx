@@ -54,6 +54,11 @@ export function DeckSetSettingsPage({ deckSetId }: { deckSetId: string }) {
         busy={busy}
         onCancel={() => navigate({ to: "/deck-set/$deckSetId", params: { deckSetId: set.id } })}
         onSubmit={async ({ name, description }) => {
+          // Defence-in-depth: a deck-set-delete could have been enqueued
+          // between render and submit. `useVisibleDeckSet` already hides
+          // the page when pending, but the form may have been mounted
+          // just before the flip.
+          if (getPendingDeletes().isPending(`deck-set:${set.id}`)) return;
           setBusy(true);
           setError(null);
           try {

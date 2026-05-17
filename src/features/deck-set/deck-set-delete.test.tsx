@@ -353,11 +353,14 @@ describe("Empty Deck-Sets survive removal of their last member (ADR-0014)", () =
 });
 
 // --- Corpse-page invariant: navigating to /deck-set/<id> after the delete
-// was enqueued must render `nicht gefunden`, not the doomed entity. This
-// regression mirrors the round-3 sharpened-brief requirement for the
-// `useVisibleDeckSet` hook on the detail page.
+// was enqueued must NOT render the doomed entity. Round-4 strengthens this
+// to a page-level redirect (mirrors deck-detail-page / card-edit-page /
+// card-create-page) — write-paths (the add/remove member-deck buttons)
+// would otherwise fire against a doomed set in the gap between mount and
+// click. The page now redirects home; the home screen filters the set
+// out of its visible list during the 10s undo window.
 
-describe("Deck-Set detail page hides pending-deleted set (ADR-0014 round 3)", () => {
+describe("Deck-Set detail page hides pending-deleted set (ADR-0014 round 4)", () => {
   beforeEach(async () => {
     await db.open();
     __resetPendingDeletesForTests();
@@ -371,7 +374,7 @@ describe("Deck-Set detail page hides pending-deleted set (ADR-0014 round 3)", ()
     __resetPendingDeletesForTests();
   });
 
-  it("renders the not-found branch when navigating directly to /deck-set/<id> while a pending-delete op for that set is live", async () => {
+  it("redirects to home when navigating directly to /deck-set/<id> while a pending-delete op for that set is live", async () => {
     const set = await createDeckSetInDb({ name: "Sprachen-Doomed" });
     const member = await createDeckInDb({ name: "Latein" });
     await addDeckToSetInDb(member.id, set.id);
@@ -390,9 +393,11 @@ describe("Deck-Set detail page hides pending-deleted set (ADR-0014 round 3)", ()
     const router = await setupDeckSetDetailRouter(set.id);
     render(<RouterProvider router={router} />);
 
-    await screen.findByText("Deck-Set nicht gefunden");
-    // The doomed set's name and member deck must not be reachable in the DOM.
-    expect(screen.queryByText("Sprachen-Doomed")).toBeNull();
-    expect(screen.queryByText("Latein")).toBeNull();
+    // The redirect effect lands us on the home page — neither the doomed
+    // set's name nor its member deck may surface anywhere in the DOM
+    // (home filters the set out via `useVisibleDeckSets`, and member
+    // decks of a pending-deleted set still render as lose decks on home;
+    // we therefore only assert the doomed set name is absent).
+    await waitFor(() => expect(screen.queryByText("Sprachen-Doomed")).toBeNull());
   });
 });

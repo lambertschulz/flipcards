@@ -2,6 +2,7 @@ import { getCard, updateCardInDb } from "@/db/cards";
 import type { Card } from "@/domain/card";
 import { CardEditor } from "@/features/card/card-editor";
 import { useGlobalTags } from "@/features/card/use-global-tags";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 import { useIsPendingDelete } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -88,11 +89,18 @@ export function CardEditPage({ deckId, cardId }: { deckId: string; cardId: strin
         suggestions={suggestions}
         onCancel={back}
         onSave={async (values) => {
+          // Defence-in-depth: the page-level guard already redirects when
+          // the card or parent deck is pending, but a delete op could
+          // be enqueued in the same React tick the user is submitting.
+          const store = getPendingDeletes();
+          if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${deckId}`)) return;
           const next = await updateCardInDb(card.id, values);
           setCard(next);
         }}
         onDiscard={async () => {
           if (!snapshot) return;
+          const store = getPendingDeletes();
+          if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${deckId}`)) return;
           const reverted = await updateCardInDb(card.id, {
             front: snapshot.front,
             back: snapshot.back,

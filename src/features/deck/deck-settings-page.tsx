@@ -62,6 +62,14 @@ export function DeckSettingsPage({ deckId }: { deckId: string }) {
         busy={busy}
         onCancel={() => navigate({ to: "/deck/$deckId", params: { deckId: deck.id } })}
         onSubmit={async ({ name, description, deckSetId }) => {
+          // Defence-in-depth: a deck-delete (or, for the move target, a
+          // deck-set-delete) could have been enqueued between render and
+          // submit. Re-check before writing — `useVisibleDeck` already
+          // hides the page when the deck is pending, but the form may have
+          // been mounted just before that flip.
+          const store = getPendingDeletes();
+          if (store.isPending(`deck:${deck.id}`)) return;
+          if (deckSetId && store.isPending(`deck-set:${deckSetId}`)) return;
           setBusy(true);
           setError(null);
           try {
