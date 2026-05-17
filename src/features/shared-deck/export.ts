@@ -4,6 +4,7 @@
 // CONTEXT.md (Shared Deck) for the "no review-state" rule.
 
 import { stringifySharedDeck } from "@/domain/shared-deck";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 
 import { collectSharedDeck } from "./collect";
 import { triggerDownload } from "./download";
@@ -17,6 +18,16 @@ export type ExportDeps = {
 };
 
 export async function exportSharedDeckToFile(deckId: string, deps: ExportDeps = {}): Promise<void> {
+  // ADR-0014 read-path invariant: pending-deleted rows must not surface in
+  // any read path. `collectSharedDeck` reads `cards` straight from IndexedDB,
+  // so a card the user deleted during its 10-second undo window would still
+  // be physically present and end up in the exported file. Mirror the
+  // backup-export pathway: drain the coordinator (commit-or-fail each
+  // in-flight op) before we collect, so the snapshot reflects the user's
+  // intent. `flushAll()` matches the synchronous-flush guarantees on
+  // visibilitychange/pagehide.
+  await getPendingDeletes().flushAll();
+
   const now = (deps.now ?? (() => new Date()))();
   const file = await collectSharedDeck(deckId, { now: () => now });
   const json = stringifySharedDeck(file);
