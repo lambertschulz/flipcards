@@ -363,4 +363,46 @@ describe("DeckDetailPage filter bar (issue #10)", () => {
       expect(within(items[0]).getByText("Bonjour")).toBeInTheDocument();
     });
   });
+
+  it("keeps a selected tag chip visible (and toggle-off-able) when its prefiltered count drops to 0", async () => {
+    // Regression for PR #43 round-3 review feedback: when a user selects a
+    // tag and then a search/status filter prefilters that tag out of
+    // `tagCounts`, the chip used to disappear — leaving an invisible filter
+    // that could only be released via the global "Filter zurücksetzen"
+    // button. The chip must remain rendered with `aria-pressed="true"` so
+    // the user can release it directly. (Selected-state visibility
+    // invariant from the sharpened brief.)
+    const deck = await createDeckInDb({ name: "D" });
+    await createCardInDb({ deckId: deck.id, front: "Bonjour", back: "Hi", tags: ["fr"] });
+    await createCardInDb({ deckId: deck.id, front: "Hallo", back: "Hello", tags: ["de"] });
+
+    const router = await setupRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    // Select the "fr" tag (count 1, single Bonjour card).
+    await clickAndFlush(await screen.findByRole("button", { name: "fr 1" }));
+
+    // Type a query that prefilters fr-tagged cards out. The "fr" chip would
+    // have count 0 in the prefiltered tagCounts and previously vanished;
+    // it must now still render with the selected styling.
+    await typeInto(await screen.findByLabelText(/Cards durchsuchen/i), "hallo");
+
+    // The chip is still in the DOM — find it via aria-pressed.
+    const frChip = await waitFor(() => {
+      const chip = screen.getByRole("button", { name: /^fr\b/ });
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+      return chip;
+    });
+
+    // The chip itself must remove the tag from `state.tags` when clicked —
+    // the user must not be forced through the global reset button.
+    await clickAndFlush(frChip);
+
+    await waitFor(() => {
+      const stillPressed = screen.queryByRole("button", { name: /^fr\b/ });
+      if (stillPressed) {
+        expect(stillPressed.getAttribute("aria-pressed")).toBe("false");
+      }
+    });
+  });
 });
