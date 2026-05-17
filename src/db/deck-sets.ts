@@ -1,4 +1,4 @@
-import { type DeckSetRow, db } from "@/db/database";
+import { type DeckRow, type DeckSetRow, db } from "@/db/database";
 import type { Deck } from "@/domain/deck";
 import {
   type DeckSet,
@@ -107,7 +107,7 @@ export async function listLoseDecks(): Promise<Deck[]> {
 // than re-exporting it, to keep the row→domain boundary local to each
 // repository module. The shape is small and stable; duplicating two lines
 // avoids reaching into a sibling file's internals.
-function fromDeckRow(row: import("@/db/database").DeckRow): Deck {
+function fromDeckRow(row: DeckRow): Deck {
   const deck: Deck = { id: row.id, name: row.name };
   if (row.description !== undefined) deck.description = row.description;
   if (row.deckSetId !== undefined) deck.deckSetId = row.deckSetId;
