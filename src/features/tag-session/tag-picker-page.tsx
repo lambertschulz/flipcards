@@ -35,7 +35,14 @@ export function TagPickerPage() {
   // or undone — `store.isPending("card:<id>")` is checked below and would
   // otherwise stay stale until the next mount. The brief's invariant: every
   // read-path filters through `store.isPending`.
-  usePendingDeletes();
+  //
+  // We keep the snapshot (a fresh `readonly PendingOp[]` reference on every
+  // store transition) and depend the `visibleDue` memo on it. The store
+  // singleton is reference-stable, so listing it alone in `useMemo` deps would
+  // NOT invalidate the memo when an op flips state — the chip counts would go
+  // stale through the undo/commit window. Depending on the snapshot makes the
+  // memo recompute on every pending-delete tick.
+  const pendingSnapshot = usePendingDeletes();
   const store = getPendingDeletes();
 
   useEffect(() => {
@@ -60,10 +67,19 @@ export function TagPickerPage() {
   // (baseline counts, AND-filter, "Session starten" CTA) reads `visibleDue`
   // so a pending-deleted card cannot leak into a tag session that the user
   // launches during the 10s undo window.
+  // `pendingSnapshot` is intentionally part of the deps: it's a fresh
+  // reference on every store transition (pending → committing → committed
+  // / undone), so listing it here is what forces this memo (and every
+  // downstream memo that derives from `visibleDue`) to recompute when an
+  // op enters or leaves the pending set. The memo body reads through
+  // `store.isPending(...)` rather than the snapshot directly, but the
+  // dep makes the recomputation reactive. `store` is reference-stable
+  // and on its own would NOT invalidate the memo.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingSnapshot is the reactive trigger; see comment above.
   const visibleDue = useMemo(() => {
     if (allDue === null) return null;
     return allDue.filter((c) => !store.isPending(`card:${c.id}`));
-  }, [allDue, store]);
+  }, [allDue, store, pendingSnapshot]);
 
   // Universe of tag-baseline-counts: how many due cards carry each tag,
   // independent of the current selection. Drives the chip ordering and is

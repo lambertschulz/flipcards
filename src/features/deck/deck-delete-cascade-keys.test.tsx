@@ -40,7 +40,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // All cards seeded by these tests get a Due review-state at t=0 so they
@@ -443,5 +443,63 @@ describe("Cascade-key invariant — ReviewSessionPage `listDueCardsInDeck`", () 
     startBtn.click();
 
     await screen.findByText(/Keine Cards fällig/i);
+  });
+});
+
+// --- Reactivity regression: memoised filters must re-run on enqueue ---------
+//
+// Round-4 codex review (PR #41): `TagPickerPage`'s `visibleDue = useMemo(...)`
+// was keyed only on `[allDue, store]`. The store singleton is reference-stable,
+// so an enqueue happening AFTER the picker mounted did NOT invalidate the memo
+// — the chip baseline count went stale until the user navigated away and back.
+// The fix: depend on the snapshot returned by `usePendingDeletes()`, which is
+// a fresh array reference on every store transition. This regression test
+// pins the behaviour by mounting the picker, observing the initial chip
+// count, enqueueing a card-delete via the live coordinator, and asserting the
+// chip count drops without remount.
+
+describe("Cascade-key invariant — TagPickerPage reactivity", () => {
+  beforeEach(async () => {
+    await db.open();
+    __resetPendingDeletesForTests();
+  });
+  afterEach(async () => {
+    await db.cards.clear();
+    await db.decks.clear();
+    await db.reviewStates.clear();
+    __resetPendingDeletesForTests();
+  });
+
+  it("updates the chip count when a pending-delete is enqueued AFTER mount (no remount)", async () => {
+    const deck = await createDeckInDb({ name: "Deck" });
+    const c1 = await seedDueCard({ deckId: deck.id, front: "C1", tags: ["alpha"] });
+    await seedDueCard({ deckId: deck.id, front: "C2", tags: ["alpha"] });
+
+    const router = await setupTagPickerRouter();
+    render(<RouterProvider router={router} />);
+
+    // Initial chip shows the full baseline count (both cards alive).
+    const chipBefore = await screen.findByRole("button", { name: /alpha/ });
+    await waitFor(() => expect(chipBefore).toHaveTextContent("2"));
+
+    // Enqueue a card-delete on the live coordinator (the singleton the page
+    // already subscribed to). Wrapped in `act` so React flushes the
+    // useSyncExternalStore notification before we read the DOM.
+    const store = getPendingDeletes();
+    act(() => {
+      store.enqueue({
+        key: `card:${c1.id}`,
+        label: "Card gelöscht",
+        commit: async () => {},
+        restore: async () => {},
+      });
+    });
+
+    // The same chip node (no remount) reflects the new count. We re-query
+    // by role to assert the badge text, not the node identity — react may
+    // legitimately swap the child text node.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /alpha/ })).toHaveTextContent("1");
+    });
   });
 });
