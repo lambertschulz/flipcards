@@ -121,6 +121,33 @@ export const BackupFileV1Schema = z
       return new Set(allIds).size === allIds.length;
     },
     { message: "card ids must be globally unique across all decks" },
+  )
+  // Restore is a clean-slate wipe-and-replace (ADR-0001) — the parser is the
+  // only gate between the file on disk and the live IndexedDB. Dangling
+  // references would survive that gate as orphaned rows: review history with
+  // no card to attribute it to, decks pointing at a deck-set that doesn't
+  // exist. We reject all three shapes here so a corrupt or hand-edited file
+  // can never produce orphans.
+  .refine(
+    (file) => {
+      const cardIds = new Set(file.decks.flatMap((deck) => deck.cards.map((card) => card.id)));
+      return file.reviewStates.every((state) => cardIds.has(state.cardId));
+    },
+    { message: "reviewStates.cardId must reference a card present in decks[].cards[]" },
+  )
+  .refine(
+    (file) => {
+      const cardIds = new Set(file.decks.flatMap((deck) => deck.cards.map((card) => card.id)));
+      return file.reviews.every((row) => cardIds.has(row.cardId));
+    },
+    { message: "reviews.cardId must reference a card present in decks[].cards[]" },
+  )
+  .refine(
+    (file) => {
+      const setIds = new Set(file.deckSets.map((set) => set.id));
+      return file.decks.every((deck) => deck.deckSetId === undefined || setIds.has(deck.deckSetId));
+    },
+    { message: "decks.deckSetId must reference a deck-set present in deckSets[]" },
   );
 
 export type BackupDeck = z.infer<typeof BackupDeckSchema>;

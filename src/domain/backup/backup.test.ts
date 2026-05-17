@@ -201,6 +201,57 @@ describe("parseBackup — errors as a discriminated union", () => {
     expect(e.kind).toBe("SchemaError");
   });
 
+  it("returns SchemaError when a reviewState references an unknown cardId", () => {
+    // Restore wipes-and-replaces the live DB (ADR-0001). A reviewState whose
+    // cardId doesn't match any card in any deck would survive that as an
+    // orphan row — learning history attributed to a card that no longer
+    // exists. The parser must reject it.
+    const file = makeValidBackup();
+    const broken: BackupFileV1 = {
+      ...file,
+      reviewStates: [{ ...sampleReviewState, cardId: "card-ghostzzz" }],
+    };
+    const e = unwrapErr(parseBackup(JSON.stringify(broken)));
+    expect(e.kind).toBe("SchemaError");
+    if (e.kind === "SchemaError") {
+      const message = e.issues.map((i) => i.message).join(" | ");
+      expect(message).toMatch(/reviewStates\.cardId/);
+    }
+  });
+
+  it("returns SchemaError when a reviews entry references an unknown cardId", () => {
+    // Same rationale as above for the per-rating log (ADR-0012): orphaned
+    // log rows would silently inflate heatmap/streak counts after restore.
+    const file = makeValidBackup();
+    const broken: BackupFileV1 = {
+      ...file,
+      reviews: [{ ...sampleReviewLog, cardId: "card-ghostzzz" }],
+    };
+    const e = unwrapErr(parseBackup(JSON.stringify(broken)));
+    expect(e.kind).toBe("SchemaError");
+    if (e.kind === "SchemaError") {
+      const message = e.issues.map((i) => i.message).join(" | ");
+      expect(message).toMatch(/reviews\.cardId/);
+    }
+  });
+
+  it("returns SchemaError when a deck's deckSetId references an unknown deck-set", () => {
+    // A deck pointing at a missing deck-set would render as "ungrouped" in
+    // the UI on restore but still carry the broken pointer in storage. We
+    // refuse the file outright rather than silently dropping the reference.
+    const file = makeValidBackup();
+    const broken: BackupFileV1 = {
+      ...file,
+      decks: [{ ...file.decks[0], deckSetId: "set-ghostzzz" }],
+    };
+    const e = unwrapErr(parseBackup(JSON.stringify(broken)));
+    expect(e.kind).toBe("SchemaError");
+    if (e.kind === "SchemaError") {
+      const message = e.issues.map((i) => i.message).join(" | ");
+      expect(message).toMatch(/deckSetId/);
+    }
+  });
+
   it("returns SchemaError when two decks share a card id (global uniqueness)", () => {
     // Card ids are the primary key on the Dexie `cards` table — duplicates
     // across decks would silently overwrite on restore. The schema must
