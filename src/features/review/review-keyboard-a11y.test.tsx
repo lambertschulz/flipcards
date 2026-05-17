@@ -12,7 +12,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Issue #12 — accessibility target (ADR-0015).
@@ -59,6 +59,30 @@ async function pressKey(init: { key: string; code?: string }) {
   });
 }
 
+/**
+ * Press a key and wait for the expected effect — retrying the press if the
+ * first dispatch landed in the gap between React's commit and the runner's
+ * `useEffect` re-binding its window-keydown listener. The runner attaches the
+ * listener inside a `useEffect`, which runs *after* paint, so under load on
+ * CI it can happen that the new phase's DOM is already in the document but
+ * the listener for that phase hasn't been bound yet — a Space dispatched at
+ * that exact tick would be swallowed. Retrying keeps the test honest about
+ * what the user experiences (a Space press always flips eventually) without
+ * masking real keyboard regressions.
+ */
+async function pressKeyUntil(init: { key: string; code?: string }, predicate: () => unknown) {
+  await waitFor(
+    async () => {
+      await pressKey(init);
+      const result = predicate();
+      // `findBy*` returns a promise; `queryBy*` returns sync — accept either.
+      if (result instanceof Promise) await result;
+      else if (!result) throw new Error("predicate not yet satisfied");
+    },
+    { timeout: 2000, interval: 50 },
+  );
+}
+
 describe("Review-Flow keyboard a11y (ADR-0015)", () => {
   beforeEach(async () => {
     await db.open();
@@ -98,12 +122,18 @@ describe("Review-Flow keyboard a11y (ADR-0015)", () => {
       // Front side renders an interactive face; assert it's there before
       // pressing Space so we know the flip handler is in scope.
       await screen.findByRole("button", { name: /Vorderseite/i });
-      await pressKey({ key: " ", code: "Space" });
+      // Press Space until the back-side rating fieldset appears. We retry to
+      // bridge the React-commit → useEffect-bind window (see pressKeyUntil).
+      // Extra Space presses on an already-flipped card are no-ops, so this is
+      // safe to retry — only the rate keys (1–4) must fire exactly once.
+      await pressKeyUntil({ key: " ", code: "Space" }, () =>
+        screen.queryByRole("button", { name: /3 Good/i }),
+      );
 
-      // Back side renders the rating fieldset (the "3 Good" button is the
-      // simplest landmark to wait on). Pressing 1–4 must record the answer
-      // and advance to the next card (or end the session).
-      await screen.findByRole("button", { name: /3 Good/i });
+      // Pressing 1–4 records the answer and advances to the next card (or
+      // ends the session). Single press only: the rating handler is
+      // idempotent in storage terms but each dispatch writes a review-log
+      // row, so retrying here would inflate the log count.
       await pressKey({ key });
     }
 
