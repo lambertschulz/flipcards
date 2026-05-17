@@ -267,3 +267,35 @@ describe("applySharedDeckSetImport — global card-ID collision", () => {
     expect(unrelated?.front).toBe("UNRELATED");
   });
 });
+
+describe("applySharedDeckSetImport — in-file card-id collision (ADR-0018)", () => {
+  // ADR-0018 allows the SAME card-id to appear in two decks within a single
+  // SharedDeckSet file. The Dexie `cards` table primary key is unique, so
+  // only the FIRST occurrence can land; the importer keeps that one and
+  // surfaces the count separately in the summary so the user knows.
+  it("imports the first occurrence, skips the second, and reports the count in the summary", async () => {
+    const file = makeFile();
+    // Inject card-shareset01 (already in deck 0) into deck 1 as well — same
+    // id, different front/back to make the "first wins" assertion sharp.
+    file.decks[1].cards = [
+      { id: "card-shareset01", front: "SECOND OCCURRENCE", back: "lose", tags: [] },
+      ...file.decks[1].cards,
+    ];
+
+    const summary = await applySharedDeckSetImport(file);
+
+    // Import succeeded.
+    expect(summary.setMode).toBe("new");
+    expect(summary.cardsSkippedDueToInFileCollision).toBe(1);
+
+    // First occurrence (from deck 0) is the one that landed.
+    const stored = await db.cards.get("card-shareset01");
+    expect(stored?.front).toBe("bonjour");
+    expect(stored?.deckId).toBe("deck-shareset01");
+
+    // Deck 1's per-deck summary records the skip.
+    const deck1 = summary.decks.find((d) => d.deckId === "deck-shareset02");
+    expect(deck1?.cardsAdded).toBe(1); // only the original Italian card
+    expect(deck1?.cardsSkipped).toBe(1); // the duplicate-id was skipped
+  });
+});

@@ -179,18 +179,27 @@ describe("Schema rules — one negative case per rule", () => {
     expect(unwrapErr(parseSharedDeck(json)).kind).toBe("SchemaError");
   });
 
-  it("rejects a SharedDeckSet whose two decks share a card id (globally unique)", () => {
+  it("accepts a SharedDeckSet whose two decks reuse the same card id (ADR-0018: cross-deck card ids allowed)", () => {
     const set = JSON.parse(JSON.stringify(sharedDeckSetFixture)) as SharedDeckSet;
-    // Force a collision: copy a card from deck 0 into deck 1 with the same id.
+    // Copy a card from deck 0 into deck 1, keeping the same id.
     const stolen = JSON.parse(
       JSON.stringify(set.decks[0].cards[0]),
     ) as SharedDeckSet["decks"][number]["cards"][number];
     set.decks[1].cards = [stolen, ...set.decks[1].cards];
+    const parsed = expectOk(parseSharedDeckSet(JSON.stringify(set)));
+    // The schema is permissive here; the importer resolves the collision.
+    expect(parsed.decks[0].cards[0].id).toBe(parsed.decks[1].cards[0].id);
+  });
+
+  it("rejects a SharedDeckSet with two decks sharing the same id (structural invariant)", () => {
+    const set = JSON.parse(JSON.stringify(sharedDeckSetFixture)) as SharedDeckSet;
+    // Force a duplicate deck-id: copy deck 0's id onto deck 1.
+    set.decks[1].id = set.decks[0].id;
     const e = unwrapErr(parseSharedDeckSet(JSON.stringify(set)));
     expect(e.kind).toBe("SchemaError");
     if (e.kind === "SchemaError") {
       const messages = e.issues.map((i) => i.message).join(" | ");
-      expect(messages).toContain("globally unique across the deck-set");
+      expect(messages).toContain("deck ids must be unique within the deck-set");
     }
   });
 

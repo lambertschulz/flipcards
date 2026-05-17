@@ -152,6 +152,17 @@ function SuccessPanel({
         hinzugefügt
         {totalSkipped > 0 ? `, ${totalSkipped} übersprungen` : ""}.
       </p>
+      {summary.cardsSkippedDueToInFileCollision > 0 ? (
+        <p
+          data-testid="shared-deck-set-import-in-file-collision-note"
+          className="text-sm text-green-900 dark:text-green-100"
+        >
+          Hinweis: {summary.cardsSkippedDueToInFileCollision}{" "}
+          {summary.cardsSkippedDueToInFileCollision === 1 ? "Card wurde" : "Cards wurden"}{" "}
+          übersprungen, weil dieselbe Card-ID in der Datei in mehreren Decks vorkam — nur das erste
+          Vorkommen wurde importiert.
+        </p>
+      ) : null}
       <ul className="space-y-1 text-sm text-green-900 dark:text-green-100">
         {summary.decks.map((d) => (
           <li key={d.deckId}>

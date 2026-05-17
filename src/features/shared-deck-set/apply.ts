@@ -62,6 +62,15 @@ export type ApplySetSummary = {
   setId: string;
   setName: string;
   decks: DeckApplyResult[];
+  /**
+   * Count of cards in the file that were dropped because the same card-id
+   * appeared in two decks within the SAME file. ADR-0018 allows cross-deck
+   * card-id duplicates at the file level, but the Dexie `cards` table uses
+   * card-id as primary key, so only the first occurrence can land. Surfaced
+   * here so the success panel can flag silent in-file collisions instead of
+   * the user wondering where the second card went.
+   */
+  cardsSkippedDueToInFileCollision: number;
 };
 
 export async function applySharedDeckSetImport(file: SharedDeckSet): Promise<ApplySetSummary> {
@@ -72,9 +81,16 @@ export async function applySharedDeckSetImport(file: SharedDeckSet): Promise<App
       const allDecks = await db.decks.toArray();
       const allSets = await db.deckSets.toArray();
 
-      // Global card-ID set — any imported card whose id matches ANY existing
-      // local card is skipped, regardless of which deck owns the local row.
-      const globalCardIds = new Set((await db.cards.toCollection().primaryKeys()) as string[]);
+      // Local card-id set — primary keys already in the db. Imported cards
+      // colliding with these are skipped (local wins, ADR-0011).
+      const localCardIds = new Set((await db.cards.toCollection().primaryKeys()) as string[]);
+      // In-file card-id set — card-ids already CLAIMED by an earlier deck in
+      // this same import. ADR-0018 allows cross-deck duplicates in a
+      // SharedDeckSet file, but the Dexie primary key is unique, so the
+      // second occurrence must be dropped. Counted separately from the
+      // local-collision skip so we can surface it to the user.
+      const inFileCardIds = new Set<string>();
+      let cardsSkippedDueToInFileCollision = 0;
 
       // Resolve the set wrapper first so we know which id to attach
       // newly-created member decks to.
@@ -107,11 +123,18 @@ export async function applySharedDeckSetImport(file: SharedDeckSet): Promise<App
 
       const deckResults: DeckApplyResult[] = [];
       for (const entry of file.decks) {
-        const result = await applyOneDeck(entry, setId, localDecks, globalCardIds);
-        deckResults.push(result);
+        const result = await applyOneDeck(entry, setId, localDecks, localCardIds, inFileCardIds);
+        cardsSkippedDueToInFileCollision += result.inFileCollisions;
+        deckResults.push(result.deckResult);
       }
 
-      return { setMode, setId, setName, decks: deckResults };
+      return {
+        setMode,
+        setId,
+        setName,
+        decks: deckResults,
+        cardsSkippedDueToInFileCollision,
+      };
     },
   );
 }
@@ -120,8 +143,9 @@ async function applyOneDeck(
   entry: SharedDeckEntry,
   importedSetId: string,
   localDecks: { id: string; name: string }[],
-  globalCardIds: Set<string>,
-): Promise<DeckApplyResult> {
+  localCardIds: Set<string>,
+  inFileCardIds: Set<string>,
+): Promise<{ deckResult: DeckApplyResult; inFileCollisions: number }> {
   const existingDeck = await db.decks.get(entry.id);
 
   if (existingDeck) {
@@ -142,28 +166,25 @@ async function applyOneDeck(
       joinedSet = false;
     }
 
-    const toAdd: CardRow[] = [];
-    for (const card of entry.cards) {
-      if (globalCardIds.has(card.id)) continue;
-      toAdd.push({
-        id: card.id,
-        deckId: existingDeck.id,
-        front: card.front,
-        back: card.back,
-        tags: [...card.tags],
-      });
-      globalCardIds.add(card.id);
-    }
+    const { toAdd, inFileCollisions } = collectCards(
+      entry,
+      existingDeck.id,
+      localCardIds,
+      inFileCardIds,
+    );
     await purgeOrphanReviewRowsAndInsert(toAdd);
 
     return {
-      mode: "merged",
-      deckId: existingDeck.id,
-      deckName: existingDeck.name,
-      joinedSet,
-      cardsAdded: toAdd.length,
-      cardsSkipped: entry.cards.length - toAdd.length,
-      cardsTotal: entry.cards.length,
+      deckResult: {
+        mode: "merged",
+        deckId: existingDeck.id,
+        deckName: existingDeck.name,
+        joinedSet,
+        cardsAdded: toAdd.length,
+        cardsSkipped: entry.cards.length - toAdd.length,
+        cardsTotal: entry.cards.length,
+      },
+      inFileCollisions,
     };
   }
 
@@ -181,29 +202,58 @@ async function applyOneDeck(
   await db.decks.add(deckRow);
   localDecks.push({ id: deckRow.id, name: deckRow.name });
 
-  const cardRows: CardRow[] = [];
-  for (const card of entry.cards) {
-    if (globalCardIds.has(card.id)) continue;
-    cardRows.push({
-      id: card.id,
+  const { toAdd: cardRows, inFileCollisions } = collectCards(
+    entry,
+    entry.id,
+    localCardIds,
+    inFileCardIds,
+  );
+  await purgeOrphanReviewRowsAndInsert(cardRows);
+
+  return {
+    deckResult: {
+      mode: nameTaken ? "renamed" : "new",
       deckId: entry.id,
+      deckName: finalName,
+      joinedSet: true,
+      cardsAdded: cardRows.length,
+      cardsSkipped: entry.cards.length - cardRows.length,
+      cardsTotal: entry.cards.length,
+    },
+    inFileCollisions,
+  };
+}
+
+// Walk an entry's cards and split them into "to insert" vs the two kinds of
+// skip: (1) collides with a card already in the LOCAL db (local wins, see
+// ADR-0011), or (2) collides with a card-id already claimed earlier in the
+// SAME file by another deck (ADR-0018 allows this at the file level, the
+// importer keeps the first occurrence). Returning the in-file count
+// separately lets the caller surface it in the summary.
+function collectCards(
+  entry: SharedDeckEntry,
+  deckId: string,
+  localCardIds: Set<string>,
+  inFileCardIds: Set<string>,
+): { toAdd: CardRow[]; inFileCollisions: number } {
+  const toAdd: CardRow[] = [];
+  let inFileCollisions = 0;
+  for (const card of entry.cards) {
+    if (localCardIds.has(card.id)) continue;
+    if (inFileCardIds.has(card.id)) {
+      inFileCollisions += 1;
+      continue;
+    }
+    toAdd.push({
+      id: card.id,
+      deckId,
       front: card.front,
       back: card.back,
       tags: [...card.tags],
     });
-    globalCardIds.add(card.id);
+    inFileCardIds.add(card.id);
   }
-  await purgeOrphanReviewRowsAndInsert(cardRows);
-
-  return {
-    mode: nameTaken ? "renamed" : "new",
-    deckId: entry.id,
-    deckName: finalName,
-    joinedSet: true,
-    cardsAdded: cardRows.length,
-    cardsSkipped: entry.cards.length - cardRows.length,
-    cardsTotal: entry.cards.length,
-  };
+  return { toAdd, inFileCollisions };
 }
 
 async function purgeOrphanReviewRowsAndInsert(rows: CardRow[]): Promise<void> {
