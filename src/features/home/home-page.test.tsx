@@ -13,8 +13,8 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 async function setupRouter() {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -146,6 +146,50 @@ describe("HomePage", () => {
     const toggle = screen.getByRole("button", { name: /Sprachen/ });
     fireEvent.click(toggle);
     expect(screen.queryByText("Französisch")).toBeNull();
+  });
+
+  it("refreshes due counts when wall-clock time crosses a nextDue boundary without any DB write", async () => {
+    // Drive the test entirely on real timers — we manipulate `Date.now()`
+    // directly (so the read-model sees the new wall clock) and dispatch
+    // `visibilitychange` to force `useNow` to refresh immediately. This
+    // exercises the same code path as the 60 s interval without faking
+    // setInterval (which would deadlock Dexie's async I/O in jsdom).
+    const baseTime = new Date("2030-01-01T08:00:00Z").getTime();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+
+    const deck = await createDeckInDb({ name: "Vokabeln" });
+    const card = await createCardInDb({ deckId: deck.id, front: "f1", back: "b1" });
+    await putReviewState(card.id, {
+      repetitions: 1,
+      easeFactor: 2.5,
+      intervalDays: 0,
+      nextDue: baseTime + 2 * 60_000, // due 2 minutes after baseline
+    });
+
+    const router = await setupRouter();
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Vokabeln")).toBeInTheDocument();
+    });
+    // Initial state at baseTime: card is NOT yet due.
+    expect(screen.getByLabelText("0 fällig")).toBeInTheDocument();
+    expect(screen.getByTestId("home-summary").textContent).toMatch(/Heute keine Cards fällig/);
+
+    // Advance only the wall clock — no DB write. Then fire the visibility
+    // event that `useNow` reacts to, which forces an immediate
+    // `setNow(Date.now())` and re-runs the read-model.
+    nowSpy.mockReturnValue(baseTime + 3 * 60_000);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("1 fällig")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("home-summary").textContent).toMatch(/1 Card fällig in 1 Deck/);
+
+    nowSpy.mockRestore();
   });
 
   it("opens the + Neu menu and exposes both create actions", async () => {

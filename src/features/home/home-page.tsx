@@ -11,7 +11,65 @@ import {
 import { StorageQuotaBanner } from "@/features/storage/storage-quota-banner";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+/**
+ * Tick `now` on a regular interval so time-dependent due counts refresh even
+ * when the user keeps the home screen mounted across a `nextDue` boundary
+ * without any Dexie write. Dexie's `useLiveQuery` only re-runs on table
+ * mutations, never on wall-clock time — without this, a card scheduled for
+ * "in one minute" stays in the non-due bucket until something unrelated
+ * triggers a re-render.
+ *
+ * We pause the interval while the tab is hidden (no need to spin a timer
+ * for an invisible UI) and force an immediate refresh on `visibilitychange`
+ * so the user sees up-to-date counts the instant they return.
+ *
+ * 60 s matches the precision the badges and summary advertise ("X fällig").
+ */
+function useNow(intervalMs = 60_000): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (timer !== null) return;
+      timer = setInterval(() => setNow(Date.now()), intervalMs);
+    };
+    const stop = () => {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    };
+    const onVisibility = () => {
+      if (typeof document === "undefined") return;
+      if (document.hidden) {
+        stop();
+      } else {
+        setNow(Date.now());
+        start();
+      }
+    };
+
+    if (typeof document !== "undefined" && document.hidden) {
+      // Tab starts hidden — don't tick until it becomes visible.
+    } else {
+      start();
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+    return () => {
+      stop();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
+    };
+  }, [intervalMs]);
+
+  return now;
+}
 
 /**
  * Home-Screen (issue #20). Main entry into the app:
@@ -49,9 +107,11 @@ export function HomePage() {
     cards === undefined ||
     reviewStates === undefined;
 
-  // `now` is recomputed per render — for due-checks at minute-precision this
-  // is fine (live-queries refire on Dexie writes, not on the wall clock).
-  const now = Date.now();
+  // `now` ticks on a visibility-aware 60 s interval (see `useNow`). Dexie
+  // live-queries only re-run on writes, so a wall-clock tick is needed to
+  // refresh due counts when the user keeps the page mounted across a
+  // `nextDue` boundary without any DB activity.
+  const now = useNow();
 
   const stateLookup = useMemo(() => {
     const map = new Map<string, ReviewState>();
