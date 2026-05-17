@@ -64,24 +64,87 @@ jobs:
           node-version: "22"
           cache: pnpm
 
-      # On pull requests: andresz1/size-limit-action builds the PR and the base
-      # branch, then posts a PR comment with the gzipped size and delta against
-      # main. The action treats `size-limit` exit codes as failures by default;
-      # `continue-on-error` above keeps an over-budget bundle from blocking the PR.
-      - name: size-limit (PR — comment with delta)
-        if: github.event_name == 'pull_request'
-        uses: andresz1/size-limit-action@v1.8.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          package_manager: pnpm
-          build_script: build
-          script: size
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      # On pushes to main: no PR to comment on, just print the report into the
-      # job log so the value is auditable post-merge.
-      - name: size-limit (push — log only)
-        if: github.event_name != 'pull_request'
+      - name: Build (PR)
+        run: pnpm build
+
+      - name: Measure PR size
+        id: pr-size
+        run: |
+          pnpm size --json > pr-size.json
+          cat pr-size.json
+          PR_BYTES=$(node -e "const r=require('./pr-size.json'); console.log(r[0].size);")
+          PR_LIMIT=$(node -e "const r=require('./pr-size.json'); console.log(r[0].sizeLimit);")
+          PR_PASSED=$(node -e "const r=require('./pr-size.json'); console.log(r[0].passed);")
+          echo "bytes=$PR_BYTES" >> "$GITHUB_OUTPUT"
+          echo "limit=$PR_LIMIT" >> "$GITHUB_OUTPUT"
+          echo "passed=$PR_PASSED" >> "$GITHUB_OUTPUT"
+
+      # On pull requests, also measure the base branch so we can show a delta.
+      - name: Checkout base branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: base
+
+      - name: Build & measure base
+        if: github.event_name == 'pull_request'
+        id: base-size
+        working-directory: base
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          pnpm size
+          pnpm size --json > base-size.json
+          cat base-size.json
+          BASE_BYTES=$(node -e "const r=require('./base-size.json'); console.log(r[0].size);")
+          echo "bytes=$BASE_BYTES" >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment with size + delta
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const prBytes = Number('${{ steps.pr-size.outputs.bytes }}');
+            const prLimit = Number('${{ steps.pr-size.outputs.limit }}');
+            const prPassed = '${{ steps.pr-size.outputs.passed }}' === 'true';
+            const baseBytes = Number('${{ steps.base-size.outputs.bytes }}' || '0');
+
+            const fmtKB = (b) => (b / 1024).toFixed(2) + ' KB';
+            const fmtPct = (n) => (n * 100).toFixed(2) + '%';
+
+            const delta = baseBytes > 0 ? prBytes - baseBytes : null;
+            const deltaPct = baseBytes > 0 ? (prBytes - baseBytes) / baseBytes : null;
+
+            const sign = (n) => (n > 0 ? '+' : '');
+            const status = prPassed
+              ? `within budget (limit: ${fmtKB(prLimit)})`
+              : `**over budget** (limit: ${fmtKB(prLimit)})`;
+            const deltaLine = delta === null
+              ? '_(base branch size unavailable)_'
+              : `Delta vs \`${{ github.event.pull_request.base.ref }}\`: **${sign(delta)}${fmtKB(delta)}** (${sign(delta)}${fmtPct(deltaPct)})`;
+
+            const body = [
+              '### Bundle-size report (gzipped)',
+              '',
+              `Initial bundle: **${fmtKB(prBytes)}** — ${status}`,
+              '',
+              deltaLine,
+              '',
+              '_Non-blocking per [ADR-0017](../blob/main/docs/adr/0017-performance-budget.md): budgets are observability, not gates._',
+            ].join('\n');
+
+            const marker = '<!-- bundle-size-report -->';
+            const fullBody = `${marker}\n${body}`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: fullBody });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: fullBody });
+            }
