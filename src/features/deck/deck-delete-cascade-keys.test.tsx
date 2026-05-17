@@ -168,6 +168,30 @@ describe("Cascade-key invariant — DeckDetailPage", () => {
     __resetPendingDeletesForTests();
   });
 
+  it("does NOT render the deck content when the deck itself is pending-deleted (page-level guard)", async () => {
+    // Regression: even though the deck-list filters the row, the user can
+    // still land on `/deck/<id>` directly via back/forward or a stale tab
+    // during the 10s window. The page-level guard short-circuits with a
+    // redirect; the deck name MUST not surface as a heading.
+    const deck = await createDeckInDb({ name: "Doomed-Deck" });
+    await createCardInDb({ deckId: deck.id, front: "Doomed-Card", back: "x" });
+
+    const store = getPendingDeletes();
+    store.enqueue({
+      key: `deck:${deck.id}`,
+      label: "Deck gelöscht",
+      commit: async () => {},
+      restore: async () => {},
+    });
+
+    const router = await setupDeckDetailRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    // No heading or card body for the pending-deleted deck.
+    await waitFor(() => expect(screen.queryByText("Doomed-Deck")).toBeNull());
+    expect(screen.queryByText("Doomed-Card")).toBeNull();
+  });
+
   it("hides child cards when the parent deck has a pending-delete op with cascade keys", async () => {
     const deck = await createDeckInDb({ name: "Anatomie" });
     const c1 = await createCardInDb({ deckId: deck.id, front: "Card-One", back: "x" });

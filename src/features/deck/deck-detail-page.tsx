@@ -3,10 +3,12 @@ import { db } from "@/db/database";
 import { deleteCardWithCascade, restoreDeletedCard } from "@/db/deletion";
 import { getPendingDeletes } from "@/lib/pending-deletes";
 import { usePendingDeletes } from "@/lib/pending-deletes-react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useEffect } from "react";
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
+  const navigate = useNavigate();
   const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
   const deckSet = useLiveQuery(
     async () => (deck?.deckSetId ? await db.deckSets.get(deck.deckSetId) : undefined),
@@ -25,8 +27,27 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
   usePendingDeletes();
   const store = getPendingDeletes();
 
+  // Page-level pending-delete guard: a pending-deleted Deck must NOT remain
+  // navigable during the 10s undo window (ADR-0014 invariant — no read-model
+  // anywhere may surface a row whose pending-delete op is in `pending` or
+  // `committing` state). The deck-list (home) already hides the row, but the
+  // browser back/forward buttons or a stale tab can still land on
+  // `/deck/<id>` directly. Redirect back to home in that case so the user
+  // sees the toast and not the doomed deck.
+  const deckIsPending = store.isPending(`deck:${deckId}`);
+  useEffect(() => {
+    if (deckIsPending) {
+      void navigate({ to: "/" });
+    }
+  }, [deckIsPending, navigate]);
+
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
+  }
+  if (deckIsPending) {
+    // Render nothing while the navigate effect resolves. The row is also
+    // already filtered out of the home view.
+    return null;
   }
   if (deck === undefined) {
     return (
