@@ -5,6 +5,7 @@ import { DeckDetailPage } from "@/features/deck/deck-detail-page";
 import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
+import { SettingsPage } from "@/features/settings/settings-page";
 import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
 import { TagSessionReviewPage } from "@/features/tag-session/tag-session-review-page";
 import { Link, Outlet, createRootRoute, createRoute } from "@tanstack/react-router";
@@ -21,6 +22,9 @@ const rootRoute = createRootRoute({
         <nav className="flex items-center gap-4 text-sm">
           <Link to="/tag-session" className="underline underline-offset-4 hover:opacity-80">
             Nach Tag lernen
+          </Link>
+          <Link to="/settings" className="underline underline-offset-4 hover:opacity-80">
+            Einstellungen
           </Link>
           <Link to="/about" className="underline underline-offset-4 hover:opacity-80">
             About
@@ -130,6 +134,12 @@ const tagSessionReviewRoute = createRoute({
   },
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -160,5 +170,6 @@ export const routeTree = rootRoute.addChildren([
   reviewSessionRoute,
   tagSessionPickerRoute,
   tagSessionReviewRoute,
+  settingsRoute,
   aboutRoute,
 ]);
