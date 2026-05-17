@@ -2,7 +2,7 @@ import { db } from "@/db/database";
 import type { CardRow, DeckRow, DeckSetRow } from "@/db/database";
 import { type PendingDeletesStore, type PendingOp, getPendingDeletes } from "@/lib/pending-deletes";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 /**
  * React hook returning the current list of pending-delete ops, re-rendering
@@ -158,11 +158,26 @@ export function useVisibleDecks(
   deps: LiveQueryDeps = [],
   initialValue?: DeckRow[],
 ): DeckRow[] | undefined {
-  usePendingDeletes();
+  const ops = usePendingDeletes();
   const store = getPendingDeletes();
   const rows = useLiveQuery(query, deps, initialValue as DeckRow[] | undefined);
-  if (rows === undefined) return undefined;
-  return rows.filter((d) => !store.isPending(`deck:${d.id}`));
+  // Memoise on the underlying `rows` reference (stable across renders while
+  // Dexie's query result hasn't changed) and the `ops` snapshot (stable
+  // across renders while the pending-deletes store hasn't changed). Without
+  // this, every render produced a fresh `.filter()` array — and any
+  // downstream `useLiveQuery([visibleDecks])` / `useMemo(..., [visibleDecks])`
+  // tore down on every render. See PR #43 review feedback.
+  //
+  // `ops` is listed in the deps even though `store.isPending` is what the
+  // filter actually reads: `ops` is the snapshot proxy that the live store
+  // hands us, and re-computing the memo when it changes is the only signal
+  // that "isPending now answers differently" (the store mutates internally
+  // and `store.isPending` reads from those internals).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `ops` is the store-snapshot proxy that signals when `store.isPending` answers differently.
+  return useMemo(() => {
+    if (rows === undefined) return undefined;
+    return rows.filter((d) => !store.isPending(`deck:${d.id}`));
+  }, [rows, ops, store]);
 }
 
 /**
@@ -183,11 +198,16 @@ export function useVisibleDeckSets(
   deps: LiveQueryDeps = [],
   initialValue?: DeckSetRow[],
 ): DeckSetRow[] | undefined {
-  usePendingDeletes();
+  const ops = usePendingDeletes();
   const store = getPendingDeletes();
   const rows = useLiveQuery(query, deps, initialValue as DeckSetRow[] | undefined);
-  if (rows === undefined) return undefined;
-  return rows.filter((s) => !store.isPending(`deck-set:${s.id}`));
+  // See `useVisibleDecks` for why we memoise — without this, every render
+  // returns a fresh `.filter()` array, destabilising downstream deps.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `ops` is the store-snapshot proxy that signals when `store.isPending` answers differently.
+  return useMemo(() => {
+    if (rows === undefined) return undefined;
+    return rows.filter((s) => !store.isPending(`deck-set:${s.id}`));
+  }, [rows, ops, store]);
 }
 
 /**
@@ -211,11 +231,19 @@ export function useVisibleCards(
   deps: LiveQueryDeps = [],
   initialValue?: CardRow[],
 ): CardRow[] | undefined {
-  usePendingDeletes();
+  const ops = usePendingDeletes();
   const store = getPendingDeletes();
   const rows = useLiveQuery(query, deps, initialValue as CardRow[] | undefined);
-  if (rows === undefined) return undefined;
-  return rows.filter(
-    (c) => !store.isPending(`card:${c.id}`) && !store.isPending(`deck:${c.deckId}`),
-  );
+  // See `useVisibleDecks` for why we memoise — without this, every render
+  // returns a fresh `.filter()` array, which destabilises downstream
+  // `useLiveQuery([cards])` and `useMemo(..., [cards])` deps and creates a
+  // re-subscribe loop. The specific instance that triggered PR #43 review
+  // feedback was the deck-detail page's reviewStates query.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `ops` is the store-snapshot proxy that signals when `store.isPending` answers differently.
+  return useMemo(() => {
+    if (rows === undefined) return undefined;
+    return rows.filter(
+      (c) => !store.isPending(`card:${c.id}`) && !store.isPending(`deck:${c.deckId}`),
+    );
+  }, [rows, ops, store]);
 }
