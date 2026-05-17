@@ -90,9 +90,12 @@ export function TagPickerPage() {
 
   const startSession = () => {
     if (selected.size === 0 || selectedCount === 0) return;
+    // Pass tags as an array so a tag name that contains a comma
+    // (e.g. "cardio,renal" — `normalizeTag` allows commas) survives the
+    // round-trip through the URL. The route validator accepts string[].
     navigate({
       to: "/tag-session/review",
-      search: { tags: Array.from(selected).join(",") },
+      search: { tags: Array.from(selected) },
     });
   };
 

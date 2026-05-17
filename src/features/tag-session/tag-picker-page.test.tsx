@@ -29,17 +29,24 @@ async function setupRouter(initialPath = "/tag-session") {
   const reviewRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/tag-session/review",
-    validateSearch: (search: Record<string, unknown>): { tags: string } => {
+    validateSearch: (search: Record<string, unknown>): { tags: string[] } => {
       const raw = search.tags;
-      return { tags: typeof raw === "string" ? raw : "" };
+      const arr = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+      const cleaned: string[] = [];
+      const seen = new Set<string>();
+      for (const entry of arr) {
+        if (typeof entry !== "string") continue;
+        const trimmed = entry.trim();
+        if (trimmed.length === 0) continue;
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        cleaned.push(trimmed);
+      }
+      return { tags: cleaned };
     },
     component: function TagReviewRouteComponent() {
       const { tags } = reviewRoute.useSearch();
-      const parsed = tags
-        .split(",")
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0);
-      return <TagSessionReviewPage tags={parsed} />;
+      return <TagSessionReviewPage tags={tags} />;
     },
   });
   const indexRoute = createRoute({
@@ -195,8 +202,43 @@ describe("TagPickerPage", () => {
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/tag-session/review");
-      expect(router.state.location.search).toMatchObject({ tags: "prüfung" });
+      expect(router.state.location.search).toMatchObject({ tags: ["prüfung"] });
     });
+  });
+
+  it("round-trips a tag whose name contains a comma without splitting it", async () => {
+    // Regression: `normalizeTag` allows commas inside a tag (only whitespace
+    // is collapsed), so a tag like "cardio,renal" is a single valid tag.
+    // A comma-joined wire format would mis-split it on the receiving side
+    // and break the AND-filter. We serialise as an array instead.
+    const deck = await createDeckInDb({ name: "D" });
+    await createCardInDb({
+      deckId: deck.id,
+      front: "1",
+      back: "1",
+      tags: ["cardio,renal"],
+    });
+
+    const router = await setupRouter();
+    render(<RouterProvider router={router} />);
+
+    // The chip itself must show the comma-containing tag as a single chip.
+    const chip = await screen.findByRole("button", { name: /cardio,renal/i });
+    expect(chip).toHaveTextContent("1");
+
+    await clickAndFlush(chip);
+    await clickAndFlush(await screen.findByRole("button", { name: /Session starten/i }));
+
+    // Navigation lands on /tag-session/review with the comma-containing tag
+    // intact as a single element of the `tags` array.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/tag-session/review");
+      expect(router.state.location.search).toMatchObject({ tags: ["cardio,renal"] });
+    });
+
+    // And the review page sees the same tag — its title prints it verbatim.
+    await screen.findByRole("button", { name: /Open-ended/i });
+    expect(screen.getByRole("heading", { name: /cardio,renal/ })).toBeInTheDocument();
   });
 });
 
@@ -232,7 +274,7 @@ describe("TagSessionReviewPage", () => {
     await createCardInDb({ deckId: deckA.id, front: "NO-A", back: "back", tags: ["prüfung"] });
     await createCardInDb({ deckId: deckB.id, front: "NO-B", back: "back", tags: ["medizin"] });
 
-    const router = await setupRouter("/tag-session/review?tags=pr%C3%BCfung,medizin");
+    const router = await setupRouter("/tag-session/review?tags=pr%C3%BCfung&tags=medizin");
     render(<RouterProvider router={router} />);
 
     // Start an Open-ended session, then verify the queue size via the
@@ -248,6 +290,8 @@ describe("TagSessionReviewPage", () => {
     await createCardInDb({ deckId: deck.id, front: "1", back: "1", tags: ["alpha"] });
 
     const router = await setupRouter("/tag-session/review?tags=beta");
+    // single-string `tags` is also accepted by the validator (deep-link with
+    // exactly one tag arrives as `?tags=foo`, not as a one-element array).
     render(<RouterProvider router={router} />);
 
     await clickAndFlush(await screen.findByRole("button", { name: /Open-ended/i }));

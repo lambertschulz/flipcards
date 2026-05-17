@@ -98,23 +98,35 @@ const tagSessionPickerRoute = createRoute({
 });
 
 // Tag-Session-Review consumes the picker's selection via the `tags` search
-// param (comma-joined). We deliberately keep it in the URL — that makes the
-// session deep-linkable and survives a hard refresh during review. The
-// validator coerces the raw search-value into a clean string.
+// param. We deliberately keep it in the URL — that makes the session
+// deep-linkable and survives a hard refresh during review. Tags are
+// serialised as an array (repeated `tags` query keys) rather than a single
+// comma-joined string: `normalizeTag` allows commas inside a tag name
+// (e.g. "cardio,renal"), so a comma-joined wire format would mis-split
+// such tags on the receiving side and break the AND-filter. The validator
+// accepts either an array (the normal case) or a single string (a single
+// tag arriving as `?tags=foo`), and trims/dedupes to a clean string[].
 const tagSessionReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tag-session/review",
-  validateSearch: (search: Record<string, unknown>): { tags: string } => {
+  validateSearch: (search: Record<string, unknown>): { tags: string[] } => {
     const raw = search.tags;
-    return { tags: typeof raw === "string" ? raw : "" };
+    const arr = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of arr) {
+      if (typeof entry !== "string") continue;
+      const trimmed = entry.trim();
+      if (trimmed.length === 0) continue;
+      if (seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      cleaned.push(trimmed);
+    }
+    return { tags: cleaned };
   },
   component: function TagSessionReviewRouteComponent() {
     const { tags } = tagSessionReviewRoute.useSearch();
-    const parsed = tags
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    return <TagSessionReviewPage tags={parsed} />;
+    return <TagSessionReviewPage tags={tags} />;
   },
 });
 
