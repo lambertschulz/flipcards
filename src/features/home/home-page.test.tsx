@@ -143,9 +143,28 @@ describe("HomePage", () => {
     await waitFor(() => {
       expect(screen.getByText("Französisch")).toBeInTheDocument();
     });
-    const toggle = screen.getByRole("button", { name: /Sprachen/ });
+    const toggle = screen.getByRole("button", { name: "Sprachen einklappen" });
     fireEvent.click(toggle);
     expect(screen.queryByText("Französisch")).toBeNull();
+  });
+
+  it("renders the deck-set name as a Link to the deck-set detail page (non-empty set)", async () => {
+    // Regression: a non-empty deck-set group must still expose a navigable
+    // Link to /deck-set/$deckSetId via the set name itself, not only via the
+    // empty-set "Decks hinzufügen" affordance. The collapse caret is a
+    // sibling button — never nested inside the link.
+    const set = await createDeckSetInDb({ name: "Sprachen" });
+    await createDeckInDb({ name: "Französisch", deckSetId: set.id });
+
+    const router = await setupRouter();
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Französisch")).toBeInTheDocument();
+    });
+    const setLink = screen.getByRole("link", { name: "Sprachen" });
+    expect(setLink).toBeInTheDocument();
+    expect(setLink.getAttribute("href")).toBe(`/deck-set/${set.id}`);
   });
 
   it("refreshes due counts when wall-clock time crosses a nextDue boundary without any DB write", async () => {

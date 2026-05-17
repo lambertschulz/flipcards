@@ -389,18 +389,32 @@ function DeckGroups({
 function DeckSetGroup({ set, members }: { set: DeckSet; members: DeckWithCounts[] }) {
   const [open, setOpen] = useState(true);
   const totalDue = members.reduce((sum, d) => sum + d.dueCount, 0);
+  // Keep the collapse toggle and the navigation Link as siblings (never nested),
+  // so the set name remains a navigable Link to the deck-set detail page while
+  // the caret independently expands/collapses the inline member list. Wrapping
+  // either inside the other would produce button-in-link / link-in-button,
+  // which fails HTML validation and assistive-tech expectations.
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex min-h-[44px] items-center gap-2 text-base font-medium hover:underline"
-        >
-          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-          <span>{set.name}</span>
-        </button>
+        <div className="flex min-h-[44px] items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-label={open ? `${set.name} einklappen` : `${set.name} ausklappen`}
+            className="flex h-11 w-11 items-center justify-center rounded-md text-base hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+          </button>
+          <Link
+            to="/deck-set/$deckSetId"
+            params={{ deckSetId: set.id }}
+            className="text-base font-medium hover:underline"
+          >
+            {set.name}
+          </Link>
+        </div>
         <span className="text-xs text-slate-500">
           {members.length === 1 ? "1 Deck" : `${members.length} Decks`}
           {totalDue > 0 ? ` · ${totalDue} fällig` : ""}
