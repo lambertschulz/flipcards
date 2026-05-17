@@ -40,7 +40,7 @@ Initial-Bundle ≤ 250 KB gzipped (siehe [ADR-0017](./docs/adr/0017-performance-
 
 ## Accessibility
 
-WCAG-AA informell, Keyboard-Coverage hart, `prefers-reduced-motion` respektiert (siehe [ADR-0015](./docs/adr/0015-accessibility-target.md)).
+WCAG-AA informell, Keyboard-Coverage hart, `prefers-reduced-motion` respektiert (siehe [ADR-0015](./docs/adr/0015-accessibility-target.md)). Manueller VoiceOver-Smoke-Test vor jedem Release: [`docs/release-checklist.md`](./docs/release-checklist.md).
 
 ## GitHub Pages
 
