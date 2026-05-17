@@ -110,6 +110,73 @@ describe("applySharedDeckImport — name collision (suffix)", () => {
   });
 });
 
+describe("applySharedDeckImport — global card-ID collisions", () => {
+  it("does NOT overwrite a card that lives in a different local deck (new-deck branch)", async () => {
+    // Seed D1 with card "card-share001" containing local content.
+    await db.decks.add({ id: "deck-other", name: "Andere" });
+    await db.cards.add({
+      id: "card-share001",
+      deckId: "deck-other",
+      front: "LOCAL FRONT",
+      back: "LOCAL BACK",
+      tags: ["local"],
+    });
+
+    // Import a fresh deck (different deck-id, different name) whose cards
+    // include the same card-id with different content. Without the global
+    // check, bulkPut would silently rewrite D1's card onto the new deck.
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("new");
+    // One card collides globally → skipped; the other lands.
+    expect(summary.cardsAdded).toBe(1);
+    expect(summary.cardsSkipped).toBe(1);
+    expect(summary.cardsTotal).toBe(2);
+
+    // D1's card is unchanged: same deckId, same content, same tags.
+    const d1Card = await db.cards.get("card-share001");
+    expect(d1Card?.deckId).toBe("deck-other");
+    expect(d1Card?.front).toBe("LOCAL FRONT");
+    expect(d1Card?.back).toBe("LOCAL BACK");
+    expect(d1Card?.tags).toEqual(["local"]);
+
+    // The new deck (D2) exists and contains only the non-colliding card.
+    const d2Cards = await db.cards.where("deckId").equals("deck-shared01").toArray();
+    expect(d2Cards.map((c) => c.id)).toEqual(["card-share002"]);
+  });
+
+  it("does NOT overwrite a card in a different local deck on the merge branch either", async () => {
+    // Target deck already exists locally (triggers merge branch). A
+    // different local deck holds a card whose id appears in the import.
+    await db.decks.add({ id: "deck-shared01", name: "Target" });
+    await db.decks.add({ id: "deck-other", name: "Andere" });
+    await db.cards.add({
+      id: "card-share002",
+      deckId: "deck-other",
+      front: "LOCAL FRONT",
+      back: "LOCAL BACK",
+      tags: ["local"],
+    });
+
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("merged");
+    // card-share001 is new → added to target; card-share002 collides globally
+    // (sits in deck-other) → skipped, not migrated.
+    expect(summary.cardsAdded).toBe(1);
+    expect(summary.cardsSkipped).toBe(1);
+
+    const stillInOther = await db.cards.get("card-share002");
+    expect(stillInOther?.deckId).toBe("deck-other");
+    expect(stillInOther?.front).toBe("LOCAL FRONT");
+    expect(stillInOther?.tags).toEqual(["local"]);
+
+    // Target gets only the non-colliding card.
+    const targetCards = await db.cards.where("deckId").equals("deck-shared01").toArray();
+    expect(targetCards.map((c) => c.id)).toEqual(["card-share001"]);
+  });
+});
+
 describe("applySharedDeckImport — frisch importierte Cards sind sofort due", () => {
   it("does not write any review-state on import (cards are due by CONTEXT.md)", async () => {
     await applySharedDeckImport(makeFile());

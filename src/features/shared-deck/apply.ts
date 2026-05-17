@@ -11,6 +11,12 @@
 // No per-deck or per-card prompt — the ADR is explicit that the import
 // pathway runs without modal interruption.
 //
+// Card-ID collisions are checked GLOBALLY (across all local decks), not just
+// against the target deck. Otherwise `bulkPut` would silently overwrite a row
+// in some other deck that happens to share a primary key — destructive data
+// loss, plus stale review-state carried onto unrelated content. Local always
+// wins: any imported card whose id already exists anywhere is skipped.
+//
 // Returns a summary the page renders as the success toast.
 
 import { type CardRow, type DeckRow, db } from "@/db/database";
@@ -29,16 +35,19 @@ export type ApplySummary = {
 
 export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySummary> {
   return await db.transaction("rw", [db.decks, db.cards], async () => {
+    // Global card-ID set — any imported card whose id matches ANY existing
+    // local card is skipped, regardless of which deck owns the local row.
+    // Using bulkPut without this check would overwrite cards in other decks
+    // (data loss). Local-always-wins per ADR-0011.
+    const globalCardIds = new Set((await db.cards.toCollection().primaryKeys()) as string[]);
+
     const existingDeck = await db.decks.get(file.deck.id);
 
     if (existingDeck) {
       // Branch 1: additive merge per card-ID.
-      const existingCardIds = new Set(
-        (await db.cards.where("deckId").equals(existingDeck.id).primaryKeys()) as string[],
-      );
       const toAdd: CardRow[] = [];
       for (const card of file.cards) {
-        if (existingCardIds.has(card.id)) continue;
+        if (globalCardIds.has(card.id)) continue;
         toAdd.push({
           id: card.id,
           deckId: existingDeck.id,
@@ -47,6 +56,8 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
           tags: [...card.tags],
         });
       }
+      // `add` (not `put`) would also be safe here since we've filtered globally,
+      // but bulkPut keeps the code uniform and we've proven the keys are unique.
       if (toAdd.length > 0) await db.cards.bulkPut(toAdd);
 
       return {
@@ -68,13 +79,19 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
     if (file.deck.description !== undefined) deckRow.description = file.deck.description;
     await db.decks.add(deckRow);
 
-    const cardRows: CardRow[] = file.cards.map((c) => ({
-      id: c.id,
-      deckId: file.deck.id,
-      front: c.front,
-      back: c.back,
-      tags: [...c.tags],
-    }));
+    // New-deck branch: still filter against the global card-ID set so we never
+    // clobber a card that lives in some other local deck.
+    const cardRows: CardRow[] = [];
+    for (const c of file.cards) {
+      if (globalCardIds.has(c.id)) continue;
+      cardRows.push({
+        id: c.id,
+        deckId: file.deck.id,
+        front: c.front,
+        back: c.back,
+        tags: [...c.tags],
+      });
+    }
     if (cardRows.length > 0) await db.cards.bulkPut(cardRows);
 
     return {
@@ -82,7 +99,7 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
       deckId: file.deck.id,
       deckName: finalName,
       cardsAdded: cardRows.length,
-      cardsSkipped: 0,
+      cardsSkipped: file.cards.length - cardRows.length,
       cardsTotal: file.cards.length,
     };
   });
