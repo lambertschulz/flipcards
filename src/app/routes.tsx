@@ -1,4 +1,5 @@
 import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
+import { PwaUpdateToast } from "@/components/pwa-update-toast";
 import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
@@ -44,6 +45,7 @@ const rootRoute = createRootRoute({
         <Outlet />
       </main>
       <PendingDeleteToasts />
+      <PwaUpdateToast />
     </div>
   ),
 });
