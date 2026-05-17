@@ -1,4 +1,5 @@
 import { db } from "@/db/database";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 
 /**
  * Wipe all user-generated data from IndexedDB.
@@ -14,6 +15,14 @@ import { db } from "@/db/database";
  * also clears Settings, that's a separate operation.
  */
 export async function wipeAllData(): Promise<void> {
+  // Bulk-replace path — ADR-0014 class (b). Drain the pending-delete
+  // coordinator BEFORE wiping so deferred deletes whose timers might fire
+  // after the wipe cannot run their (now-stale) commit thunks. Note: in
+  // practice the wipe would just delete already-empty rows again, but
+  // routing every bulk-replace through `cancelAll()` keeps the contract
+  // uniform (and the audit-grep test green).
+  await getPendingDeletes().cancelAll();
+
   // One transaction across all tables so the wipe is atomic — a tab kill mid-
   // way leaves either the full pre-state or the full empty-state, never a
   // half-deleted database.

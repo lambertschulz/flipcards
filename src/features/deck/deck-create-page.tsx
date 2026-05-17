@@ -1,13 +1,14 @@
 import { db } from "@/db/database";
 import { createDeckInDb } from "@/db/decks";
 import { DeckForm } from "@/features/deck/deck-form";
+import { useVisibleDeckSets } from "@/lib/pending-deletes-react";
 import { useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 
 export function DeckCreatePage() {
   const navigate = useNavigate();
-  const deckSets = useLiveQuery(() => db.deckSets.orderBy("name").toArray(), [], []);
+  // ADR-0014: pending-deleted deck-sets must not appear in the picker.
+  const deckSets = useVisibleDeckSets(() => db.deckSets.orderBy("name").toArray(), [], []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

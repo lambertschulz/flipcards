@@ -1,16 +1,33 @@
+import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
+import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { moveDeckToSetInDb, updateDeckInDb } from "@/db/decks";
+import { deleteDeckWithCascade, restoreDeletedDeck } from "@/db/deletion";
 import { DeckForm } from "@/features/deck/deck-form";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useVisibleCards, useVisibleDeck, useVisibleDeckSets } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 
 export function DeckSettingsPage({ deckId }: { deckId: string }) {
   const navigate = useNavigate();
-  const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
-  const deckSets = useLiveQuery(() => db.deckSets.orderBy("name").toArray(), [], []);
+  // ADR-0014: route all entity-table reads through the visibility-filtered
+  // hooks so a pending-deleted deck (or a pending-deleted deck-set in the
+  // picker) cannot surface here. The grep-audit invariant
+  // (`useLiveQuery(...) => db.(decks|deckSets|cards). …`) means even
+  // `.count()` reads must go through the hooks — we materialise the array
+  // and read `.length` instead of relying on Dexie's `.count()`.
+  const deck = useVisibleDeck(deckId);
+  const deckSets = useVisibleDeckSets(() => db.deckSets.orderBy("name").toArray(), [], []);
+  const deckCards = useVisibleCards(
+    () => db.cards.where("deckId").equals(deckId).toArray(),
+    [deckId],
+    [],
+  );
+  const cardCount = deckCards.length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
@@ -45,6 +62,14 @@ export function DeckSettingsPage({ deckId }: { deckId: string }) {
         busy={busy}
         onCancel={() => navigate({ to: "/deck/$deckId", params: { deckId: deck.id } })}
         onSubmit={async ({ name, description, deckSetId }) => {
+          // Defence-in-depth: a deck-delete (or, for the move target, a
+          // deck-set-delete) could have been enqueued between render and
+          // submit. Re-check before writing — `useVisibleDeck` already
+          // hides the page when the deck is pending, but the form may have
+          // been mounted just before that flip.
+          const store = getPendingDeletes();
+          if (store.isPending(`deck:${deck.id}`)) return;
+          if (deckSetId && store.isPending(`deck-set:${deckSetId}`)) return;
           setBusy(true);
           setError(null);
           try {
@@ -57,6 +82,60 @@ export function DeckSettingsPage({ deckId }: { deckId: string }) {
             setError(e instanceof Error ? e.message : "Speichern fehlgeschlagen");
             setBusy(false);
           }
+        }}
+      />
+
+      <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
+        <h3 className="text-base font-medium text-red-700 dark:text-red-300">Gefahrenzone</h3>
+        <p className="mb-3 mt-1 text-sm text-slate-600 dark:text-slate-400">
+          Das Deck und alle enthaltenen Cards werden mit 10s-Undo gelöscht.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setShowDeleteModal(true)}
+          aria-label="Deck löschen"
+        >
+          Deck löschen
+        </Button>
+      </div>
+
+      <ConfirmDeleteModal
+        open={showDeleteModal}
+        title="Deck löschen?"
+        body={
+          <p>
+            Deck <strong>„{deck.name}"</strong> und seine <strong>{cardCount}</strong>{" "}
+            {cardCount === 1 ? "Card" : "Cards"} löschen? Du kannst die Aktion 10 Sekunden lang
+            rückgängig machen.
+          </p>
+        }
+        onCancel={() => setShowDeleteModal(false)}
+        onConfirm={async () => {
+          setShowDeleteModal(false);
+          // Resolve the cascade snapshot BEFORE enqueue: every read-path
+          // (tag-session, per-deck review, due-counts) checks `isPending`
+          // by `card:<id>`, so the coordinator must know which card keys
+          // the pending-deck-delete subsumes from the very first publish
+          // tick. Otherwise a navigation into a session during the 10s
+          // window would still find the doomed cards.
+          const childCardIds = await db.cards.where("deckId").equals(deck.id).primaryKeys();
+          const store = getPendingDeletes();
+          let snapshot: Awaited<ReturnType<typeof deleteDeckWithCascade>> | null = null;
+          store.enqueue({
+            key: `deck:${deck.id}`,
+            cascadeKeys: childCardIds.map((id) => `card:${id}`),
+            label: `Deck „${deck.name}" gelöscht`,
+            commit: async () => {
+              snapshot = await deleteDeckWithCascade(deck.id);
+            },
+            restore: async () => {
+              if (snapshot) await restoreDeletedDeck(snapshot);
+            },
+          });
+          // Optimistic navigate back to the deck list — the deck-list page
+          // filters out pending-deleted decks so the row vanishes immediately.
+          void navigate({ to: "/" });
         }}
       />
     </section>

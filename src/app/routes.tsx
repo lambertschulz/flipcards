@@ -1,3 +1,4 @@
+import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
 import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
@@ -39,6 +40,7 @@ const rootRoute = createRootRoute({
       <main>
         <Outlet />
       </main>
+      <PendingDeleteToasts />
     </div>
   ),
 });
@@ -60,7 +62,11 @@ const deckDetailRoute = createRoute({
   path: "/deck/$deckId",
   component: function DeckDetailRouteComponent() {
     const { deckId } = deckDetailRoute.useParams();
-    return <DeckDetailPage deckId={deckId} />;
+    // Key by deckId so navigating between /deck/a → /deck/b remounts the
+    // page and discards page-local filter state (issue #10: "re-entering
+    // the page resets the bar"). TanStack Router otherwise reuses the
+    // component instance across param changes.
+    return <DeckDetailPage key={deckId} deckId={deckId} />;
   },
 });
 
