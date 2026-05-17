@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import type { DeckSet } from "@/domain/deck-set";
 import { INITIAL_REVIEW_STATE, type ReviewState } from "@/domain/sm2";
+import { exportBackupToFile } from "@/features/backup/backup-export";
 import {
   type DeckWithCounts,
   type HomeSummary,
@@ -285,12 +286,10 @@ function EmptyState() {
           title="Backup wiederherstellen"
           description="Stelle deine Decks aus einer Backup-Datei wieder her."
           action={
-            <Button variant="outline" disabled aria-describedby="backup-coming">
-              Backup importieren
-            </Button>
+            <Link to="/backup/import">
+              <Button variant="outline">Backup importieren</Button>
+            </Link>
           }
-          hintId="backup-coming"
-          hint="Bald verfügbar."
         />
       </div>
     </div>
@@ -327,19 +326,34 @@ function EmptyStateCard({
 // --- Footer ---------------------------------------------------------------
 
 function HomeFooter() {
+  const [busy, setBusy] = useState(false);
   return (
     <footer className="space-y-2 pt-4 text-sm text-slate-600 dark:text-slate-400">
       <p className="font-medium">Mehr Inhalte</p>
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" disabled aria-describedby="footer-import-coming">
+        <Button variant="outline" disabled aria-describedby="footer-curated-coming">
           Curated importieren
         </Button>
-        <Button variant="outline" disabled aria-describedby="footer-import-coming">
-          Backup importieren
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await exportBackupToFile();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Backup wird erstellt…" : "Backup exportieren"}
         </Button>
+        <Link to="/backup/import">
+          <Button variant="outline">Backup importieren</Button>
+        </Link>
       </div>
-      <p id="footer-import-coming" className="text-xs text-slate-500">
-        Curated- und Backup-Import folgen in eigenen Tickets.
+      <p id="footer-curated-coming" className="text-xs text-slate-500">
+        Curated-Import folgt in einem eigenen Ticket.
       </p>
     </footer>
   );
