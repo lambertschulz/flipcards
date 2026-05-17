@@ -13,6 +13,7 @@ import {
   summarize,
 } from "@/domain/session";
 import { type Rating, type ReviewState, scheduleNext } from "@/domain/sm2";
+import { CardEditModal } from "@/features/review/card-edit-modal";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -44,6 +45,11 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The id of the card currently being edited in the modal, or null when no
+  // edit is open. We deliberately keep this state local to the page (not in
+  // `phase`) so that opening / closing the modal can never invalidate the
+  // session queue (issue #6).
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const phaseRef = useRef(phase);
   useEffect(() => {
     phaseRef.current = phase;
@@ -107,6 +113,23 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
     setPhase({ kind: "done" });
   }, []);
 
+  /**
+   * Splice an edited card into the live session queue without disturbing the
+   * queue position, the answer history, or the SRS state. Used when the user
+   * fixes a typo via the edit-modal (issue #6).
+   *
+   * Note: the card-id is stable across edits, so SM-2 scheduling, the review
+   * log, and the queue order all remain valid — we just swap in the new
+   * front/back/tags wherever the card appears in the remaining queue.
+   */
+  const handleCardUpdated = useCallback((next: Card) => {
+    setPhase((p) => {
+      if (p.kind !== "reviewing") return p;
+      const nextQueue = p.queue.map((c) => (c.id === next.id ? next : c));
+      return { ...p, queue: nextQueue };
+    });
+  }, []);
+
   // Keyboard: Space flips the card; 1-4 rate the back side.
   useEffect(() => {
     if (phase.kind !== "reviewing") return;
@@ -168,8 +191,22 @@ export function ReviewSessionPage({ deckId }: { deckId: string }) {
           onFlip={flip}
           onAnswer={answer}
           onEnd={endNow}
+          onEdit={() => setEditingCardId(phase.queue[phase.index].id)}
         />
       ) : null}
+      {phase.kind === "reviewing" && editingCardId !== null
+        ? (() => {
+            const cardToEdit = phase.queue.find((c) => c.id === editingCardId);
+            if (!cardToEdit) return null;
+            return (
+              <CardEditModal
+                card={cardToEdit}
+                onCardUpdated={handleCardUpdated}
+                onClose={() => setEditingCardId(null)}
+              />
+            );
+          })()
+        : null}
       {phase.kind === "done" ? (
         <SessionEnd
           summary={summarize(answers)}
@@ -247,12 +284,14 @@ function ReviewCardView({
   onFlip,
   onAnswer,
   onEnd,
+  onEdit,
 }: {
   phase: Extract<Phase, { kind: "reviewing" }>;
   totalAnswered: number;
   onFlip: () => void;
   onAnswer: (rating: Rating) => void;
   onEnd: () => void;
+  onEdit: () => void;
 }) {
   const card = phase.queue[phase.index];
   const totalForFooter = totalAnswered + phase.queue.length;
@@ -260,28 +299,44 @@ function ReviewCardView({
 
   return (
     <div className="space-y-4">
-      {/* The face uses role="button" rather than a real <button> so block-level
-          markdown content can render inside without producing invalid nested
-          interactive elements. */}
-      <div
-        role={phase.showBack ? undefined : "button"}
-        tabIndex={phase.showBack ? -1 : 0}
-        onClick={phase.showBack ? undefined : onFlip}
-        onKeyDown={(e) => {
-          if (!phase.showBack && (e.code === "Space" || e.key === "Enter")) {
-            e.preventDefault();
-            onFlip();
-          }
-        }}
-        aria-label={phase.showBack ? undefined : "Vorderseite der Card — antippen zum Umdrehen"}
-        className="block w-full min-h-[40vh] cursor-pointer rounded-md border border-slate-200 bg-white p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:border-slate-800 dark:bg-slate-950"
-      >
-        <MarkdownView source={phase.showBack ? card.back : card.front} />
-        {!phase.showBack ? (
-          <p className="mt-4 text-xs text-slate-500">Tippen, Space oder Enter zum Umdrehen</p>
-        ) : (
-          <hr className="my-4 border-slate-200 dark:border-slate-800" />
-        )}
+      <div className="relative">
+        {/* The face uses role="button" rather than a real <button> so block-level
+            markdown content can render inside without producing invalid nested
+            interactive elements. */}
+        <div
+          role={phase.showBack ? undefined : "button"}
+          tabIndex={phase.showBack ? -1 : 0}
+          onClick={phase.showBack ? undefined : onFlip}
+          onKeyDown={(e) => {
+            if (!phase.showBack && (e.code === "Space" || e.key === "Enter")) {
+              e.preventDefault();
+              onFlip();
+            }
+          }}
+          aria-label={phase.showBack ? undefined : "Vorderseite der Card — antippen zum Umdrehen"}
+          className="block w-full min-h-[40vh] cursor-pointer rounded-md border border-slate-200 bg-white p-4 pr-14 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:border-slate-800 dark:bg-slate-950"
+        >
+          <MarkdownView source={phase.showBack ? card.back : card.front} />
+          {!phase.showBack ? (
+            <p className="mt-4 text-xs text-slate-500">Tippen, Space oder Enter zum Umdrehen</p>
+          ) : (
+            <hr className="my-4 border-slate-200 dark:border-slate-800" />
+          )}
+        </div>
+        {/* Edit-affordance: pencil-icon, always visible during review (front &
+            back). Click bubbling is stopped so tapping it does NOT flip the
+            card. Touch-target ≥ 44 px per ADR-0009. See issue #6. */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
+          aria-label="Card bearbeiten"
+          className="absolute right-2 top-2 inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <PencilIcon />
+        </button>
       </div>
 
       {phase.showBack ? (
@@ -308,6 +363,30 @@ function ReviewCardView({
         </button>
       </div>
     </div>
+  );
+}
+
+function PencilIcon() {
+  // Inline SVG keeps the bundle free of an icon dependency. 20×20 inside the
+  // 44×44 touch-target hit area so the glyph stays readable while the tap
+  // surface stays comfortable on mobile (ADR-0009).
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <title>Bearbeiten</title>
+      <path d="M4 16v-2.5L12.5 5l2.5 2.5L6.5 16H4z" />
+      <path d="M11.5 6L14 8.5" />
+    </svg>
   );
 }
 
