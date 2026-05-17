@@ -1,3 +1,4 @@
+import { PendingDeleteToasts } from "@/components/pending-delete-toasts";
 import { BackupImportPage } from "@/features/backup/backup-import-page";
 import { CardCreatePage } from "@/features/card/card-create-page";
 import { CardEditPage } from "@/features/card/card-edit-page";
@@ -10,6 +11,7 @@ import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { HomePage } from "@/features/home/home-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
 import { SettingsPage } from "@/features/settings/settings-page";
+import { SharedDeckImportPage } from "@/features/shared-deck/shared-deck-import-page";
 import { SharedDeckSetImportPage } from "@/features/shared-deck-set/shared-deck-set-import-page";
 import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
 import { TagSessionReviewPage } from "@/features/tag-session/tag-session-review-page";
@@ -39,6 +41,7 @@ const rootRoute = createRootRoute({
       <main>
         <Outlet />
       </main>
+      <PendingDeleteToasts />
     </div>
   ),
 });
@@ -60,7 +63,11 @@ const deckDetailRoute = createRoute({
   path: "/deck/$deckId",
   component: function DeckDetailRouteComponent() {
     const { deckId } = deckDetailRoute.useParams();
-    return <DeckDetailPage deckId={deckId} />;
+    // Key by deckId so navigating between /deck/a → /deck/b remounts the
+    // page and discards page-local filter state (issue #10: "re-entering
+    // the page resets the bar"). TanStack Router otherwise reuses the
+    // component instance across param changes.
+    return <DeckDetailPage key={deckId} deckId={deckId} />;
   },
 });
 
@@ -175,6 +182,12 @@ const backupImportRoute = createRoute({
   component: BackupImportPage,
 });
 
+const sharedDeckImportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/shared-deck/import",
+  component: SharedDeckImportPage,
+});
+
 const sharedDeckSetImportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/shared-deck-set/import",
@@ -216,6 +229,7 @@ export const routeTree = rootRoute.addChildren([
   tagSessionReviewRoute,
   settingsRoute,
   backupImportRoute,
+  sharedDeckImportRoute,
   sharedDeckSetImportRoute,
   aboutRoute,
 ]);

@@ -2,6 +2,8 @@ import { getCard, updateCardInDb } from "@/db/cards";
 import type { Card } from "@/domain/card";
 import { CardEditor } from "@/features/card/card-editor";
 import { useGlobalTags } from "@/features/card/use-global-tags";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import { useIsPendingDelete } from "@/lib/pending-deletes-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
@@ -15,6 +17,16 @@ export function CardEditPage({ deckId, cardId }: { deckId: string; cardId: strin
   const [snapshot, setSnapshot] = useState<Card | null>(null);
   const [editorKey, setEditorKey] = useState(0);
 
+  // ADR-0014: the card-edit route is reachable by direct URL or browser
+  // back-nav during the 10s undo window after a card-delete. We mirror the
+  // page-level guard the deck-detail-page uses for pending-deleted decks:
+  // subscribe to `card:<id>` (and the cascade parent `deck:<deckId>`), and
+  // when either is in the pending-delete window, redirect to the deck-detail
+  // page so the user sees the toast and not a corpse editor.
+  const cardIsPending = useIsPendingDelete(`card:${cardId}`);
+  const parentDeckPending = useIsPendingDelete(`deck:${deckId}`);
+  const hidden = cardIsPending || parentDeckPending;
+
   useEffect(() => {
     let cancelled = false;
     getCard(cardId).then((c) => {
@@ -27,8 +39,19 @@ export function CardEditPage({ deckId, cardId }: { deckId: string; cardId: strin
     };
   }, [cardId]);
 
+  useEffect(() => {
+    if (hidden) {
+      void navigate({ to: "/deck/$deckId", params: { deckId } });
+    }
+  }, [hidden, navigate, deckId]);
+
   const back = () => navigate({ to: "/deck/$deckId", params: { deckId } });
 
+  if (hidden) {
+    // Render nothing while the navigate effect resolves — the row is also
+    // hidden in the deck-detail list, so the user only sees the toast.
+    return null;
+  }
   if (card === null) {
     return <p className="text-sm text-slate-500">Lade Card…</p>;
   }
@@ -66,11 +89,18 @@ export function CardEditPage({ deckId, cardId }: { deckId: string; cardId: strin
         suggestions={suggestions}
         onCancel={back}
         onSave={async (values) => {
+          // Defence-in-depth: the page-level guard already redirects when
+          // the card or parent deck is pending, but a delete op could
+          // be enqueued in the same React tick the user is submitting.
+          const store = getPendingDeletes();
+          if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${deckId}`)) return;
           const next = await updateCardInDb(card.id, values);
           setCard(next);
         }}
         onDiscard={async () => {
           if (!snapshot) return;
+          const store = getPendingDeletes();
+          if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${deckId}`)) return;
           const reverted = await updateCardInDb(card.id, {
             front: snapshot.front,
             back: snapshot.back,

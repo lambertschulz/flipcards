@@ -3,6 +3,7 @@
 // the UI buttons call.
 
 import { stringifyBackup } from "@/domain/backup";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 
 import { collectBackup } from "./collect";
 import { triggerDownload } from "./download";
@@ -16,6 +17,15 @@ export type ExportDeps = {
 };
 
 export async function exportBackupToFile(deps: ExportDeps = {}): Promise<void> {
+  // ADR-0014 invariant: pending-deleted rows must not surface in any read-path.
+  // The backup snapshot reads straight from IndexedDB, so we have to make sure
+  // every in-flight delete is committed (the rows are physically gone) before
+  // we collect — otherwise the export captures a row the user has already
+  // marked for deletion. `flushAll()` waits for each pending op to either
+  // commit or fail, matching the synchronous-flush guarantees on
+  // visibilitychange/pagehide.
+  await getPendingDeletes().flushAll();
+
   const now = (deps.now ?? (() => new Date()))();
   const file = await collectBackup({ now: () => now });
   const json = stringifyBackup(file);

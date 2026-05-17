@@ -2,9 +2,14 @@ import { Button } from "@/components/ui/button";
 import { db } from "@/db/database";
 import { addDeckToSetInDb, removeDeckFromSetInDb } from "@/db/deck-sets";
 import { exportSharedDeckSetToFile } from "@/features/shared-deck-set/export";
-import { Link } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
-import { useState } from "react";
+import { getPendingDeletes } from "@/lib/pending-deletes";
+import {
+  useIsPendingDelete,
+  useVisibleDeckSet,
+  useVisibleDecks,
+} from "@/lib/pending-deletes-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
 /**
  * Deck-Set detail view. Lists member decks and, when the user opens the
@@ -12,25 +17,45 @@ import { useState } from "react";
  * (lose decks and decks from other sets — picking one of the latter moves
  * it, per ADR-0003). Removing the last deck leaves the set empty and
  * intact (ADR-0014).
+ *
+ * Reads go through the visibility-filtered hooks in
+ * `@/lib/pending-deletes-react` (ADR-0014 invariant): pending-deleted
+ * deck-sets and pending-deleted member/addable decks must not surface here.
  */
 export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
-  const set = useLiveQuery(() => db.deckSets.get(deckSetId), [deckSetId], null);
-  const memberDecks = useLiveQuery(
+  const navigate = useNavigate();
+  const set = useVisibleDeckSet(deckSetId);
+  const memberDecks = useVisibleDecks(
     () => db.decks.where("deckSetId").equals(deckSetId).toArray(),
     [deckSetId],
-    undefined,
   );
-  const addableDecks = useLiveQuery(
+  const addableDecks = useVisibleDecks(
     () => db.decks.filter((d) => d.deckSetId !== deckSetId).toArray(),
     [deckSetId],
-    undefined,
   );
+
+  // ADR-0014: the deck-set-detail route is reachable by direct URL or
+  // browser back-nav during the 10s undo window after a deck-set-delete.
+  // The add/remove buttons would otherwise mutate a deck-set that has
+  // already been optimistically deleted. Page-level guard mirrors the
+  // deck-detail-page / card-edit-page pattern.
+  const deckSetPending = useIsPendingDelete(`deck-set:${deckSetId}`);
+  useEffect(() => {
+    if (deckSetPending) {
+      void navigate({ to: "/" });
+    }
+  }, [deckSetPending, navigate]);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   if (set === null) {
     return <p className="text-sm text-slate-500">Lade Deck-Set…</p>;
+  }
+  if (deckSetPending) {
+    // Render nothing while the navigate effect resolves. The row is also
+    // already filtered out of the home view.
+    return null;
   }
   if (set === undefined) {
     return (
@@ -114,6 +139,15 @@ export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
                 variant="ghost"
                 size="sm"
                 onClick={async () => {
+                  // Defence-in-depth: re-check pending state right before the
+                  // write. The page-level guard normally catches a deck-set
+                  // delete, and `useVisibleDecks` already hides pending decks
+                  // from the rendered list, but a race between render and
+                  // click is possible.
+                  const store = getPendingDeletes();
+                  if (store.isPending(`deck-set:${set.id}`) || store.isPending(`deck:${deck.id}`)) {
+                    return;
+                  }
                   await removeDeckFromSetInDb(deck.id);
                 }}
                 aria-label={`Deck ${deck.name} aus Set entfernen`}
@@ -130,6 +164,13 @@ export function DeckSetDetailPage({ deckSetId }: { deckSetId: string }) {
           decks={sortedAddable}
           loading={addableDecks === undefined}
           onAdd={async (deckId) => {
+            // Defence-in-depth: same rationale as the remove button — both
+            // sides of the relation (the set and the deck) may have been
+            // queued for deletion in the gap between render and click.
+            const store = getPendingDeletes();
+            if (store.isPending(`deck-set:${set.id}`) || store.isPending(`deck:${deckId}`)) {
+              return;
+            }
             await addDeckToSetInDb(deckId, set.id);
           }}
         />

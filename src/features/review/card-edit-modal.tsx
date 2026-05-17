@@ -3,6 +3,7 @@ import { updateCardInDb } from "@/db/cards";
 import type { Card } from "@/domain/card";
 import { CardEditor } from "@/features/card/card-editor";
 import { useGlobalTags } from "@/features/card/use-global-tags";
+import { getPendingDeletes } from "@/lib/pending-deletes";
 import { useEffect, useRef, useState } from "react";
 
 /**
@@ -73,10 +74,23 @@ export function CardEditModal({
             suggestions={suggestions}
             onCancel={onClose}
             onSave={async (values) => {
+              // Defence-in-depth: the review-session loader already filters
+              // pending cards, but a delete could be enqueued from another
+              // tab/route while this modal is open. Re-check before writing.
+              const store = getPendingDeletes();
+              if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${card.deckId}`)) {
+                onClose();
+                return;
+              }
               const next = await updateCardInDb(card.id, values);
               onCardUpdated(next);
             }}
             onDiscard={async () => {
+              const store = getPendingDeletes();
+              if (store.isPending(`card:${card.id}`) || store.isPending(`deck:${card.deckId}`)) {
+                onClose();
+                return;
+              }
               const reverted = await updateCardInDb(card.id, {
                 front: snapshot.front,
                 back: snapshot.back,

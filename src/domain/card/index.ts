@@ -105,6 +105,83 @@ function sumDataUriBase64Bytes(markdown: string): number {
   return total;
 }
 
+export type CardStatusFilter = "all" | "due";
+
+export type FilterCardsOptions = {
+  query?: string;
+  tags?: string[];
+  status?: CardStatusFilter;
+  /**
+   * IDs of cards considered Due at the moment of filtering. Required only when
+   * `status === "due"`. The domain layer does not know about Review-State or
+   * the current time — the caller resolves which cards are due (typically via
+   * `listDueCardsInDeck` in `db/review-states.ts`) and passes the resulting
+   * id-set here. Pure-function purity is preserved.
+   */
+  dueCardIds?: ReadonlySet<string>;
+};
+
+/**
+ * Apply the deck-detail filter combination (issue #10) to a list of cards.
+ *
+ * AND-semantics across all three filters:
+ *   - `query`  — case-insensitive substring match on `front` *or* `back`
+ *                (Markdown source, not rendered HTML). Whitespace-only and
+ *                empty queries are treated as "no query".
+ *   - `tags`   — multi-select AND: a card must carry *all* given tags.
+ *                Empty array means "no tag filter" (cf. `dueCardsForTagAnd`,
+ *                which uses the opposite convention because its caller is
+ *                the Tag-Session-Picker; here the filter bar is additive,
+ *                so an empty tag-set must be a no-op).
+ *   - `status` — `"all"` (default) or `"due"`. When `"due"`, the caller must
+ *                supply `dueCardIds`.
+ *
+ * Input order is preserved.
+ */
+export function filterCards(cards: readonly Card[], options: FilterCardsOptions = {}): Card[] {
+  const needle = (options.query ?? "").trim().toLowerCase();
+  const requiredTags = options.tags ?? [];
+  const status = options.status ?? "all";
+  const dueIds = options.dueCardIds;
+
+  return cards.filter((card) => {
+    if (needle.length > 0) {
+      const front = card.front.toLowerCase();
+      const back = card.back.toLowerCase();
+      if (!front.includes(needle) && !back.includes(needle)) return false;
+    }
+    if (requiredTags.length > 0) {
+      const cardTags = new Set(card.tags);
+      for (const tag of requiredTags) {
+        if (!cardTags.has(tag)) return false;
+      }
+    }
+    if (status === "due") {
+      if (!dueIds || !dueIds.has(card.id)) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Per-tag card counts under the *currently applied* search + status filter,
+ * ignoring the tag selection itself. Used to drive the "count" badge on each
+ * tag chip in the deck-detail filter bar: it answers "how many cards would
+ * I see if I added this tag to the filter?" — independent of which other
+ * tags are already selected, but constrained by the query and status.
+ *
+ * Returns counts in `card.tags` first-occurrence order (matches
+ * `extractTagsFromCards`), so the chip ordering stays stable as the user
+ * types.
+ */
+export function tagCountsForFilter(
+  cards: readonly Card[],
+  options: Omit<FilterCardsOptions, "tags"> = {},
+): Array<{ tag: string; count: number }> {
+  const prefiltered = filterCards(cards, { ...options, tags: [] });
+  return extractTagsFromCards(prefiltered as Card[]);
+}
+
 export function extractTagsFromCards(cards: Card[]): Array<{ tag: string; count: number }> {
   const counts = new Map<string, number>();
   const firstSeen = new Map<string, number>();
