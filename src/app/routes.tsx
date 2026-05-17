@@ -10,6 +10,7 @@ import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
 import { HomePage } from "@/features/home/home-page";
 import { ReviewSessionPage } from "@/features/review/review-session-page";
 import { SettingsPage } from "@/features/settings/settings-page";
+import { SharedDeckImportPage } from "@/features/shared-deck/shared-deck-import-page";
 import { TagPickerPage } from "@/features/tag-session/tag-picker-page";
 import { TagSessionReviewPage } from "@/features/tag-session/tag-session-review-page";
 import { Link, Outlet, createRootRoute, createRoute } from "@tanstack/react-router";
@@ -174,6 +175,12 @@ const backupImportRoute = createRoute({
   component: BackupImportPage,
 });
 
+const sharedDeckImportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/shared-deck/import",
+  component: SharedDeckImportPage,
+});
+
 const aboutRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/about",
@@ -209,5 +216,6 @@ export const routeTree = rootRoute.addChildren([
   tagSessionReviewRoute,
   settingsRoute,
   backupImportRoute,
+  sharedDeckImportRoute,
   aboutRoute,
 ]);

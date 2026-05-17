@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { deleteCard } from "@/db/cards";
 import { db } from "@/db/database";
+import { exportSharedDeckToFile } from "@/features/shared-deck/export";
 import { Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useState } from "react";
 
 export function DeckDetailPage({ deckId }: { deckId: string }) {
   const deck = useLiveQuery(() => db.decks.get(deckId), [deckId], null);
@@ -16,6 +18,7 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
     [deckId],
     undefined,
   );
+  const [exporting, setExporting] = useState(false);
 
   if (deck === null) {
     return <p className="text-sm text-slate-500">Lade Deck…</p>;
@@ -49,6 +52,22 @@ export function DeckDetailPage({ deckId }: { deckId: string }) {
           <Link to="/deck/$deckId/settings" params={{ deckId: deck.id }}>
             <Button variant="outline">Deck-Einstellungen</Button>
           </Link>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try {
+                await exportSharedDeckToFile(deck.id);
+              } finally {
+                setExporting(false);
+              }
+            }}
+            data-testid="deck-export-shared-button"
+          >
+            {exporting ? "Wird exportiert…" : "Deck teilen / exportieren"}
+          </Button>
         </div>
       </div>
 

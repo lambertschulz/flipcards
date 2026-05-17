@@ -261,13 +261,22 @@ function EmptyState() {
   return (
     <div className="space-y-3">
       <p className="text-slate-600 dark:text-slate-400">Willkommen — leg los, indem du:</p>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <EmptyStateCard
           title="Eigenes Deck erstellen"
           description="Starte mit einem leeren Deck und füge eigene Cards hinzu."
           action={
             <Link to="/deck/new">
               <Button>Deck erstellen</Button>
+            </Link>
+          }
+        />
+        <EmptyStateCard
+          title="Shared Deck importieren"
+          description="Importiere ein Deck, das jemand mit dir geteilt hat."
+          action={
+            <Link to="/shared-deck/import">
+              <Button variant="outline">Shared Deck importieren</Button>
             </Link>
           }
         />
@@ -331,6 +340,9 @@ function HomeFooter() {
     <footer className="space-y-2 pt-4 text-sm text-slate-600 dark:text-slate-400">
       <p className="font-medium">Mehr Inhalte</p>
       <div className="flex flex-wrap gap-2">
+        <Link to="/shared-deck/import">
+          <Button variant="outline">Shared Deck importieren</Button>
+        </Link>
         <Button variant="outline" disabled aria-describedby="footer-curated-coming">
           Curated importieren
         </Button>
