@@ -96,6 +96,10 @@ export function TagChipsInput({ tags, onChange, suggestions, id }: TagChipsInput
             commit(draft);
           }}
           placeholder={tags.length === 0 ? "Tags hinzufügen…" : ""}
+          // a11y note (ADR-0015): `outline-none` here is intentional and safe
+          // because the wrapping <div> above carries `focus-within:ring-2` —
+          // the focus indicator moves to the chip container so the visible
+          // affordance is preserved.
           className="min-w-[8rem] flex-1 bg-transparent py-1 text-base outline-none"
         />
       </div>

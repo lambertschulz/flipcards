@@ -4,8 +4,11 @@ import { createCardInDb } from "@/db/cards";
 import { db } from "@/db/database";
 import { createDeckInDb } from "@/db/decks";
 import { DeckDetailPage } from "@/features/deck/deck-detail-page";
-import { DeckListPage } from "@/features/deck/deck-list-page";
 import { DeckSettingsPage } from "@/features/deck/deck-settings-page";
+// DeckListPage was removed when the Home-Screen landed (PR #49) — Home is now
+// the deck-list surface, so the deck-list isPending regression test below
+// renders HomePage instead.
+import { HomePage } from "@/features/home/home-page";
 import { __resetPendingDeletesForTests, getPendingDeletes } from "@/lib/pending-deletes";
 import {
   Outlet,
@@ -280,11 +283,11 @@ describe("Deck delete via deck-settings-page (ADR-0014)", () => {
 
 // --- Optimistic-hide must persist through the `committing` window ----------
 //
-// Regression: the deck-list-page and deck-detail-page filters used to check
-// only `op.state === "pending"`, which let the row flash back into view
-// during the in-flight commit (between `pending` and `committed`). Both pages
-// now defer to `store.isPending(key)`, which covers both `pending` and
-// `committing`. These tests pin that behaviour.
+// Regression: the deck-list (now Home) and deck-detail-page filters used to
+// check only `op.state === "pending"`, which let the row flash back into view
+// during the in-flight commit (between `pending` and `committed`). Both
+// surfaces now defer to `store.isPending(key)`, which covers both `pending`
+// and `committing`. These tests pin that behaviour.
 
 async function setupDeckListRouter() {
   const rootRoute = createRootRoute({
@@ -298,7 +301,7 @@ async function setupDeckListRouter() {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: DeckListPage,
+    component: HomePage,
   });
   const deckRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -310,8 +313,42 @@ async function setupDeckListRouter() {
     path: "/deck/new",
     component: () => <div>new deck</div>,
   });
+  const deckSetNewRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/deck-set/new",
+    component: () => <div>new deck-set</div>,
+  });
+  const deckSetRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/deck-set/$deckSetId",
+    component: () => <div>deck-set</div>,
+  });
+  const tagSessionRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/tag-session",
+    component: () => <div>tag-session</div>,
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: () => <div>settings</div>,
+  });
+  const backupImportRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/backup/import",
+    component: () => <div>backup-import</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, deckRoute, deckNewRoute]),
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      deckRoute,
+      deckNewRoute,
+      deckSetNewRoute,
+      deckSetRoute,
+      tagSessionRoute,
+      settingsRoute,
+      backupImportRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   await router.load();
