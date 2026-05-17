@@ -187,4 +187,53 @@ describe("applySharedDeckImport — frisch importierte Cards sind sofort due", (
     const states = await db.reviewStates.toArray();
     expect(states).toHaveLength(0);
   });
+
+  it("purges orphan reviewStates rows for imported card-ids (new-deck branch)", async () => {
+    // Setup: an orphan reviewStates row from a previously-deleted card. The
+    // current production `deleteCard` doesn't cascade reviewStates, so this
+    // shape genuinely appears in the wild. The card-id matches one we're
+    // about to import.
+    await db.reviewStates.add({
+      cardId: "card-share001",
+      repetitions: 7,
+      easeFactor: 2.8,
+      intervalDays: 30,
+      nextDue: Date.now() + 30 * 86_400_000, // far in the future
+    });
+
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("new");
+    expect(summary.cardsAdded).toBe(2);
+
+    // Invariant: shared-deck imports carry no review state. The orphan row
+    // must be gone so the imported card surfaces as fresh-Due.
+    const orphan = await db.reviewStates.get("card-share001");
+    expect(orphan).toBeUndefined();
+    const allStates = await db.reviewStates.toArray();
+    expect(allStates).toHaveLength(0);
+  });
+
+  it("purges orphan reviewStates rows for added card-ids (merge branch)", async () => {
+    // Same scenario but the target deck exists locally so the import takes
+    // the merge branch. The orphan row sits on the card-id we'll add.
+    await db.decks.add({ id: "deck-shared01", name: "Existing local name" });
+    await db.reviewStates.add({
+      cardId: "card-share002",
+      repetitions: 3,
+      easeFactor: 2.5,
+      intervalDays: 14,
+      nextDue: Date.now() + 14 * 86_400_000,
+    });
+
+    const summary = await applySharedDeckImport(makeFile());
+
+    expect(summary.mode).toBe("merged");
+    expect(summary.cardsAdded).toBe(2);
+
+    const orphan = await db.reviewStates.get("card-share002");
+    expect(orphan).toBeUndefined();
+    const allStates = await db.reviewStates.toArray();
+    expect(allStates).toHaveLength(0);
+  });
 });

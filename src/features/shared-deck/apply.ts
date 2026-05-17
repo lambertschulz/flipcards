@@ -34,7 +34,7 @@ export type ApplySummary = {
 };
 
 export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySummary> {
-  return await db.transaction("rw", [db.decks, db.cards], async () => {
+  return await db.transaction("rw", [db.decks, db.cards, db.reviewStates], async () => {
     // Global card-ID set — any imported card whose id matches ANY existing
     // local card is skipped, regardless of which deck owns the local row.
     // Using bulkPut without this check would overwrite cards in other decks
@@ -56,9 +56,18 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
           tags: [...card.tags],
         });
       }
-      // `add` (not `put`) would also be safe here since we've filtered globally,
-      // but bulkPut keeps the code uniform and we've proven the keys are unique.
-      if (toAdd.length > 0) await db.cards.bulkPut(toAdd);
+      // Drop any orphan reviewStates rows for the card-ids we're about to add.
+      // `deleteCard` does NOT cascade reviewStates, so an earlier card with the
+      // same id could leave a stale row behind. Without this purge the imported
+      // card would inherit that stale progress and not surface as fresh-Due,
+      // violating "Shared Decks carry no review state, fresh due on import"
+      // (CONTEXT.md). Local-always-wins only applies to extant card rows.
+      if (toAdd.length > 0) {
+        await db.reviewStates.bulkDelete(toAdd.map((c) => c.id));
+        // `add` (not `put`) would also be safe here since we've filtered globally,
+        // but bulkPut keeps the code uniform and we've proven the keys are unique.
+        await db.cards.bulkPut(toAdd);
+      }
 
       return {
         mode: "merged",
@@ -92,7 +101,11 @@ export async function applySharedDeckImport(file: SharedDeck): Promise<ApplySumm
         tags: [...c.tags],
       });
     }
-    if (cardRows.length > 0) await db.cards.bulkPut(cardRows);
+    // Same orphan-purge as the merge branch — see comment above.
+    if (cardRows.length > 0) {
+      await db.reviewStates.bulkDelete(cardRows.map((c) => c.id));
+      await db.cards.bulkPut(cardRows);
+    }
 
     return {
       mode: nameTaken ? "renamed" : "new",
