@@ -47,3 +47,31 @@ export async function listDueCardsInDeck(deckId: string, now: number): Promise<C
   }
   return due;
 }
+
+/**
+ * Return all Due Cards across every deck (deck-übergreifend). Used by the
+ * Tag-Session-Picker (issue #7) — feeds the domain helpers
+ * `listTagsWithDueCounts` and `dueCardsForTagAnd`.
+ *
+ * Like `listDueCardsInDeck`, this performs an N+1 read (one review-state
+ * lookup per card). For the v1 size budget that's acceptable; if the corpus
+ * grows beyond a few thousand cards we can switch to a dexie multi-key range
+ * query on `reviewStates.nextDue`.
+ */
+export async function listAllDueCards(now: number): Promise<Card[]> {
+  const cardRows = await db.cards.toArray();
+  const due: Card[] = [];
+  for (const cardRow of cardRows) {
+    const state = await getReviewState(cardRow.id);
+    if (isDue(state, now)) {
+      due.push({
+        id: cardRow.id,
+        deckId: cardRow.deckId,
+        front: cardRow.front,
+        back: cardRow.back,
+        tags: [...(cardRow.tags ?? [])],
+      });
+    }
+  }
+  return due;
+}
