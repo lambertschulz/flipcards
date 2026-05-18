@@ -219,7 +219,7 @@ describe("Edit-during-Review (issue #6)", () => {
 
     // Reveal and rate. There's only one card, so after Good the session ends.
     await click(await screen.findByRole("button", { name: /Vorderseite/i }));
-    await click(await screen.findByRole("button", { name: /3 Good/i }));
+    await click(await screen.findByRole("button", { name: "Gut" }));
     // Wait for the session-end screen to confirm the answer() flow finished
     // (it writes review-state + review-log before transitioning).
     await screen.findByRole("heading", { name: /Session beendet/i });

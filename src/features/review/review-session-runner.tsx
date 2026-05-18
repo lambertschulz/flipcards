@@ -1,5 +1,6 @@
 import { MarkdownView } from "@/components/markdown-view";
 import { Button } from "@/components/ui/button";
+import { db } from "@/db/database";
 import { getReviewState, putReviewState } from "@/db/review-states";
 import { appendReview } from "@/db/reviews";
 import type { Card } from "@/domain/card";
@@ -12,6 +13,7 @@ import {
   summarize,
 } from "@/domain/session";
 import { type Rating, type ReviewState, scheduleNext } from "@/domain/sm2";
+import { type Streak, computeStreak } from "@/domain/stats";
 import { CardEditModal } from "@/features/review/card-edit-modal";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
@@ -27,10 +29,10 @@ const ratingButtons: {
   key: string;
   variant: "outline" | "default";
 }[] = [
-  { rating: "again", label: "1 Again", key: "1", variant: "outline" },
-  { rating: "hard", label: "2 Hard", key: "2", variant: "outline" },
-  { rating: "good", label: "3 Good", key: "3", variant: "default" },
-  { rating: "easy", label: "4 Easy", key: "4", variant: "outline" },
+  { rating: "again", label: "Wieder", key: "1", variant: "outline" },
+  { rating: "hard", label: "Schwer", key: "2", variant: "outline" },
+  { rating: "good", label: "Gut", key: "3", variant: "default" },
+  { rating: "easy", label: "Leicht", key: "4", variant: "outline" },
 ];
 
 export interface ReviewSessionRunnerProps {
@@ -67,6 +69,7 @@ export function ReviewSessionRunner({
   const [answers, setAnswers] = useState<AnswerEvent[]>([]);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
+  const [streakAtEnd, setStreakAtEnd] = useState<Streak | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The id of the card currently being edited in the modal, or null when no
   // edit is open. We deliberately keep this state local to the page (not in
@@ -91,6 +94,7 @@ export function ReviewSessionRunner({
         setAnswers([]);
         setStartedAt(Date.now());
         setEndedAt(null);
+        setStreakAtEnd(null);
         setPhase({ kind: "reviewing", queue, index: 0, showBack: false });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -103,33 +107,42 @@ export function ReviewSessionRunner({
     setPhase((p) => (p.kind === "reviewing" && !p.showBack ? { ...p, showBack: true } : p));
   }, []);
 
-  const answer = useCallback(async (rating: Rating) => {
-    const current = phaseRef.current;
-    if (current.kind !== "reviewing" || !current.showBack) return;
-    const card = current.queue[current.index];
-
-    const now = Date.now();
-    const priorState = await getReviewState(card.id);
-    const nextState = scheduleNext(priorState, rating, now);
-    await persistAnswer(card.id, nextState, rating, now);
-
-    setAnswers((prev) => [...prev, { cardId: card.id, rating }]);
-
-    const remaining = current.queue.slice(current.index + 1);
-    const nextQueue = requeueIfAgain(remaining, card, rating);
-
-    if (nextQueue.length === 0) {
-      setEndedAt(Date.now());
-      setPhase({ kind: "done" });
-      return;
-    }
-    setPhase({ kind: "reviewing", queue: nextQueue, index: 0, showBack: false });
-  }, []);
-
-  const endNow = useCallback(() => {
-    setEndedAt(Date.now());
+  const finishSession = useCallback(async () => {
+    const ended = Date.now();
+    const reviews = await db.reviews.toArray();
+    setEndedAt(ended);
+    setStreakAtEnd(computeStreak(reviews, ended));
     setPhase({ kind: "done" });
   }, []);
+
+  const answer = useCallback(
+    async (rating: Rating) => {
+      const current = phaseRef.current;
+      if (current.kind !== "reviewing" || !current.showBack) return;
+      const card = current.queue[current.index];
+
+      const now = Date.now();
+      const priorState = await getReviewState(card.id);
+      const nextState = scheduleNext(priorState, rating, now);
+      await persistAnswer(card.id, nextState, rating, now);
+
+      setAnswers((prev) => [...prev, { cardId: card.id, rating }]);
+
+      const remaining = current.queue.slice(current.index + 1);
+      const nextQueue = requeueIfAgain(remaining, card, rating);
+
+      if (nextQueue.length === 0) {
+        await finishSession();
+        return;
+      }
+      setPhase({ kind: "reviewing", queue: nextQueue, index: 0, showBack: false });
+    },
+    [finishSession],
+  );
+
+  const endNow = useCallback(() => {
+    void finishSession();
+  }, [finishSession]);
 
   /**
    * Splice an edited card into the live session queue without disturbing the
@@ -212,6 +225,7 @@ export function ReviewSessionRunner({
       {phase.kind === "done" ? (
         <SessionEnd
           summary={summarize(answers)}
+          streak={streakAtEnd}
           durationMs={(endedAt ?? Date.now()) - (startedAt ?? Date.now())}
           onRetry={() => startSession({ kind: "open-ended" })}
           onBack={onBack}
@@ -343,7 +357,13 @@ function ReviewCardView({
         <fieldset className="grid grid-cols-2 gap-2 border-0 p-0 sm:grid-cols-4">
           <legend className="sr-only">Antwort</legend>
           {ratingButtons.map((b) => (
-            <Button key={b.rating} size="lg" variant={b.variant} onClick={() => onAnswer(b.rating)}>
+            <Button
+              key={b.rating}
+              size="lg"
+              variant={b.variant}
+              aria-keyshortcuts={b.key}
+              onClick={() => onAnswer(b.rating)}
+            >
               {b.label}
             </Button>
           ))}
@@ -392,11 +412,13 @@ function PencilIcon() {
 
 function SessionEnd({
   summary,
+  streak,
   durationMs,
   onRetry,
   onBack,
 }: {
   summary: SessionSummary;
+  streak: Streak | null;
   durationMs: number;
   onRetry: () => void;
   onBack: () => void;
@@ -404,25 +426,34 @@ function SessionEnd({
   const minutes = Math.floor(durationMs / 60_000);
   const seconds = Math.floor((durationMs % 60_000) / 1000);
   const durationLabel = minutes > 0 ? `${minutes} min ${seconds} s` : `${seconds} s`;
+  const currentStreak = streak?.current ?? 0;
 
   return (
-    <div className="space-y-4 rounded-md border border-slate-200 p-4 dark:border-slate-800">
-      <h3 className="text-base font-medium">Session beendet</h3>
-      <p className="text-slate-700 dark:text-slate-300">
-        {summary.total} Cards in {durationLabel}.
-      </p>
-      <ul className="grid grid-cols-2 gap-1 text-sm sm:grid-cols-4">
-        <li>Again: {summary.byRating.again}</li>
-        <li>Hard: {summary.byRating.hard}</li>
-        <li>Good: {summary.byRating.good}</li>
-        <li>Easy: {summary.byRating.easy}</li>
-      </ul>
+    <section className="space-y-5 py-2" data-testid="review-session-summary">
+      <div className="space-y-1" data-testid="review-session-streak">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Lernserie</p>
+        <p className="text-3xl font-semibold tracking-normal text-slate-950 dark:text-slate-50">
+          {currentStreak} {currentStreak === 1 ? "Tag" : "Tage"}
+        </p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          {summary.total} Cards beantwortet · {durationLabel}
+        </p>
+      </div>
+      <div className="space-y-2">
+        <h3 className="text-base font-medium">Session beendet</h3>
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
+          <li>Wieder: {summary.byRating.again}</li>
+          <li>Schwer: {summary.byRating.hard}</li>
+          <li>Gut: {summary.byRating.good}</li>
+          <li>Leicht: {summary.byRating.easy}</li>
+        </ul>
+      </div>
       <div className="flex flex-wrap gap-2">
         <Button onClick={onRetry}>Nochmal</Button>
         <Button variant="outline" onClick={onBack}>
           Zurück
         </Button>
       </div>
-    </div>
+    </section>
   );
 }
