@@ -127,7 +127,7 @@ describe("Review-Flow keyboard a11y (ADR-0015)", () => {
       // Extra Space presses on an already-flipped card are no-ops, so this is
       // safe to retry — only the rate keys (1–4) must fire exactly once.
       await pressKeyUntil({ key: " ", code: "Space" }, () =>
-        screen.queryByRole("button", { name: /3 Good/i }),
+        screen.queryByRole("button", { name: "Gut" }),
       );
 
       // Pressing 1–4 records the answer and advances to the next card (or
@@ -168,6 +168,6 @@ describe("Review-Flow keyboard a11y (ADR-0015)", () => {
     await pressKey({ key: " ", code: "Space" });
 
     // Back side now exposes the rating buttons — flip succeeded.
-    await screen.findByRole("button", { name: /3 Good/i });
+    await screen.findByRole("button", { name: "Gut" });
   });
 });

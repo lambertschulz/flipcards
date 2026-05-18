@@ -74,16 +74,19 @@ describe("ReviewSessionPage — full session smoke test", () => {
     render(<RouterProvider router={router} />);
 
     await screen.findByRole("heading", { name: /Lernen — Test-Deck/i });
-    await clickAndFlush(screen.getByRole("button", { name: /Open-ended/i }));
+    await clickAndFlush(await screen.findByRole("button", { name: /Open-ended/i }));
 
     for (let i = 0; i < 5; i++) {
       const face = await screen.findByRole("button", { name: /Vorderseite/i });
       await clickAndFlush(face);
-      const goodBtn = await screen.findByRole("button", { name: /3 Good/i });
+      const goodBtn = await screen.findByRole("button", { name: "Gut" });
       await clickAndFlush(goodBtn);
     }
 
     await screen.findByRole("heading", { name: /Session beendet/i });
+    expect(screen.getByTestId("review-session-summary")).toHaveTextContent("5 Cards beantwortet");
+    expect(screen.getByTestId("review-session-summary")).toHaveTextContent("Gut: 5");
+    expect(screen.getByTestId("review-session-streak")).toHaveTextContent("1 Tag");
 
     expect(await db.reviews.count()).toBe(5);
     for (const id of cardIds) {
@@ -103,19 +106,46 @@ describe("ReviewSessionPage — full session smoke test", () => {
     render(<RouterProvider router={router} />);
 
     await screen.findByRole("heading", { name: /Lernen — Again-Deck/i });
-    await clickAndFlush(screen.getByRole("button", { name: /Open-ended/i }));
+    await clickAndFlush(await screen.findByRole("button", { name: /Open-ended/i }));
 
     // 2 due cards + 1 Again requeue = 3 answers before the summary.
     for (let step = 0; step < 3; step++) {
       const face = await screen.findByRole("button", { name: /Vorderseite/i });
       await clickAndFlush(face);
-      const rating = step === 0 ? /1 Again/i : /3 Good/i;
+      const rating = step === 0 ? "Wieder" : "Gut";
       const btn = await screen.findByRole("button", { name: rating });
       await clickAndFlush(btn);
     }
 
     await screen.findByRole("heading", { name: /Session beendet/i });
     expect(await db.reviews.count()).toBe(3);
+  });
+
+  it("shows grading labels without interval or shortcut prefixes while keeping keyboard shortcuts", async () => {
+    const deck = await createDeckInDb({ name: "Labels-Deck" });
+    await createCardInDb({ deckId: deck.id, front: "Front", back: "Back" });
+
+    const router = await setupRouter(deck.id);
+    render(<RouterProvider router={router} />);
+
+    await clickAndFlush(await screen.findByRole("button", { name: /Open-ended/i }));
+    await clickAndFlush(await screen.findByRole("button", { name: /Vorderseite/i }));
+
+    expect(screen.getByRole("button", { name: "Wieder" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "1",
+    );
+    expect(screen.getByRole("button", { name: "Schwer" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "2",
+    );
+    expect(screen.getByRole("button", { name: "Gut" })).toHaveAttribute("aria-keyshortcuts", "3");
+    expect(screen.getByRole("button", { name: "Leicht" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "4",
+    );
+    expect(screen.queryByRole("button", { name: /1 Again/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/min|Tag(e)?|Tage|day|days/i)).not.toBeInTheDocument();
   });
 
   it("shows the empty-state when the deck has no cards", async () => {
